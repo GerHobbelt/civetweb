@@ -29,6 +29,10 @@ install(FILES
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   COMPONENT civetweb-c-library)
 
+hunter_add_package(md5)
+find_package(md5 CONFIG REQUIRED)
+target_link_libraries(c-library PUBLIC md5::md5)
+
 if(WIN32)
   target_link_libraries(civetweb-c-library PUBLIC Ws2_32)
 endif()
