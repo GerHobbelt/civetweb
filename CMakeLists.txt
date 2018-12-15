@@ -350,7 +350,7 @@ if (CIVETWEB_ENABLE_CXX)
     add_cxx_compiler_flag(-Werror)
     add_cxx_compiler_flag(/WX)
   endif()
-  add_cxx_compiler_flag(-pedantic-errors)
+  #add_cxx_compiler_flag(-pedantic-errors) Disabled for GCC Build
   add_cxx_compiler_flag(-fvisibility=hidden)
   add_cxx_compiler_flag(-fstack-protector-strong RELEASE)
 
