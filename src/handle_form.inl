@@ -95,10 +95,18 @@ url_encoded_field_get(
     struct mg_form_data_handler *fdh)
 {
 	char key_dec[1024];
+	char sbuf[3072] = { 0 } ;
 
-	char *value_dec = (char *)mg_malloc_ctx(*value_len + 1, conn->phys_ctx);
+	char *value_dec = NULL ;
 	int value_dec_len, ret;
 
+        if ( (*value_len) < sizeof(sbuf)) {
+		/* most often value_len is small size and hence avoid malloc */
+		value_dec = sbuf ;
+	}
+	else {
+		value_dec = (char *)mg_malloc_ctx((*value_len) + 1, conn->phys_ctx);
+	}
 	if (!value_dec) {
 		/* Log error message and stop parsing the form data. */
 		mg_cry_internal(conn,
@@ -122,7 +130,9 @@ url_encoded_field_get(
 	                     (size_t)value_dec_len,
 	                     fdh->user_data);
 
-	mg_free(value_dec);
+	if ((value_dec) && (value_dec != sbuf)) {
+		mg_free(value_dec);
+	}
 
 	return ret;
 }
@@ -183,7 +193,9 @@ mg_handle_form_request(struct mg_connection *conn,
 {
 	const char *content_type;
 	char path[512];
-	char buf[MG_BUF_LEN]; /* Must not be smaller than ~900 */
+	//char buf[MG_BUF_LEN]; /* Must not be smaller than ~900 - see sanity check */
+	char *buf = NULL ;
+	int szbuf = 0 ;
 	int field_storage;
 	int buf_fill = 0;
 	int r;
@@ -191,6 +203,19 @@ mg_handle_form_request(struct mg_connection *conn,
 	struct mg_file fstore = STRUCT_FILE_INITIALIZER;
 	int64_t file_size = 0; /* init here, to a avoid a false positive
 	                         "uninitialized variable used" warning */
+	if (!conn) {
+		return -1 ;
+	}
+	buf = conn->rxfbuf ;
+	szbuf = sizeof(conn->rxfbuf) ;
+	if ((!buf) || (szbuf < 1024)) {
+		return -1 ;
+	}
+	memset(buf, 0, szbuf);
+ 	//buf[0] = 0 ;
+
+	//set a minimum partial rx data of 1024 bytes and partial timeout of 4000ms(not used)
+	mg_set_partial_rx(conn, 4000, 1024);
 
 	int has_body_data =
 	    (conn->request_info.content_length > 0) || (conn->is_chunked);
@@ -394,9 +419,9 @@ mg_handle_form_request(struct mg_connection *conn,
 			int end_of_key_value_pair_found = 0;
 			int get_block;
 
-			if ((size_t)buf_fill < (sizeof(buf) - 1)) {
+			if ((size_t)buf_fill < (szbuf - 1)) {
 
-				size_t to_read = sizeof(buf) - 1 - (size_t)buf_fill;
+				size_t to_read = szbuf - 1 - (size_t)buf_fill;
 				r = mg_read(conn, buf + (size_t)buf_fill, to_read);
 				if ((r < 0) || ((r == 0) && all_data_read)) {
 					/* read error */
@@ -459,7 +484,7 @@ mg_handle_form_request(struct mg_connection *conn,
 #endif /* NO_FILESYSTEMS */
 
 			get_block = 0;
-			/* Loop to read values larger than sizeof(buf)-keylen-2 */
+			/* Loop to read values larger than szbuf-keylen-2 */
 			do {
 				next = strchr(val, '&');
 				if (next) {
@@ -524,12 +549,12 @@ mg_handle_form_request(struct mg_connection *conn,
 					used = next - buf;
 					memmove(buf,
 					        buf + (size_t)used,
-					        sizeof(buf) - (size_t)used);
+					        szbuf - (size_t)used);
 					next = buf;
 					buf_fill -= (int)used;
-					if ((size_t)buf_fill < (sizeof(buf) - 1)) {
+					if ((size_t)buf_fill < (szbuf - 1)) {
 
-						size_t to_read = sizeof(buf) - 1 - (size_t)buf_fill;
+						size_t to_read = szbuf - 1 - (size_t)buf_fill;
 						r = mg_read(conn, buf + (size_t)buf_fill, to_read);
 						if ((r < 0) || ((r == 0) && all_data_read)) {
 #if !defined(NO_FILESYSTEMS)
@@ -588,7 +613,7 @@ mg_handle_form_request(struct mg_connection *conn,
 
 			/* Proceed to next entry */
 			used = next - buf;
-			memmove(buf, buf + (size_t)used, sizeof(buf) - (size_t)used);
+			memmove(buf, buf + (size_t)used, szbuf - (size_t)used);
 			buf_fill -= (int)used;
 		}
 
@@ -599,12 +624,13 @@ mg_handle_form_request(struct mg_connection *conn,
 		/* The form data is in the request body data, encoded as multipart
 		 * content (see https://www.ietf.org/rfc/rfc1867.txt,
 		 * https://www.ietf.org/rfc/rfc2388.txt). */
-		char *boundary;
-		size_t bl;
+		//1024 bytes more than enough for boundary as the following code enforces max 70 bytes
+		char boundary[1024] = { 0 } ;
+		size_t bl = 0 ;
 		ptrdiff_t used;
 		struct mg_request_info part_header;
 		char *hbuf;
-		const char *content_disp, *hend, *fbeg, *fend, *nbeg, *nend;
+		const char *content_disp, *hend, *fbeg = NULL , *fend, *nbeg, *nend;
 		const char *next;
 		unsigned part_no;
 		int all_data_read = 0;
@@ -626,14 +652,9 @@ mg_handle_form_request(struct mg_connection *conn,
 		/* Copy boundary string to variable "boundary" */
 		fbeg = content_type + bl + 9;
 		bl = strlen(fbeg);
-		boundary = (char *)mg_malloc(bl + 1);
-		if (!boundary) {
-			/* Out of memory */
-			mg_cry_internal(conn,
-			                "%s: Cannot allocate memory for boundary [%lu]",
-			                __func__,
-			                (unsigned long)bl);
-			return -1;
+		if (bl >= sizeof(boundary)) {
+			//printf("%s unlikley size for boundary, bl=%ld \n",__func__,bl);
+			return -1 ;
 		}
 		memcpy(boundary, fbeg, bl);
 		boundary[bl] = 0;
@@ -644,7 +665,6 @@ mg_handle_form_request(struct mg_connection *conn,
 			hbuf = strchr(boundary + 1, '"');
 			if ((!hbuf) || (*hbuf != '"')) {
 				/* Malformed request */
-				mg_free(boundary);
 				return -1;
 			}
 			*hbuf = 0;
@@ -661,24 +681,22 @@ mg_handle_form_request(struct mg_connection *conn,
 			 * leading hyphens.
 			 */
 
-			/* The algorithm can not work if bl >= sizeof(buf), or if buf
+			/* The algorithm can not work if bl >= szbuf, or if buf
 			 * can not hold the multipart header plus the boundary.
 			 * Requests with long boundaries are not RFC compliant, maybe they
-			 * are intended attacks to interfere with this algorithm. */
-			mg_free(boundary);
+			 * are intended attacks to interfere with this algorithm. */			
 			return -1;
 		}
 		if (bl < 4) {
 			/* Sanity check:  A boundary string of less than 4 bytes makes
 			 * no sense either. */
-			mg_free(boundary);
 			return -1;
 		}
 
 		for (part_no = 0;; part_no++) {
 			size_t towrite, fnlen, n;
 			int get_block;
-			size_t to_read = sizeof(buf) - 1 - (size_t)buf_fill;
+			size_t to_read = szbuf - 1 - (size_t)buf_fill;
 
 			/* Unused without filesystems */
 			(void)n;
@@ -686,7 +704,6 @@ mg_handle_form_request(struct mg_connection *conn,
 			r = mg_read(conn, buf + (size_t)buf_fill, to_read);
 			if ((r < 0) || ((r == 0) && all_data_read)) {
 				/* read error */
-				mg_free(boundary);
 				return -1;
 			}
 			if (r == 0) {
@@ -697,7 +714,6 @@ mg_handle_form_request(struct mg_connection *conn,
 			buf[buf_fill] = 0;
 			if (buf_fill < 1) {
 				/* No data */
-				mg_free(boundary);
 				return -1;
 			}
 
@@ -715,12 +731,10 @@ mg_handle_form_request(struct mg_connection *conn,
 
 			if (buf[0] != '-' || buf[1] != '-') {
 				/* Malformed request */
-				mg_free(boundary);
 				return -1;
 			}
 			if (0 != strncmp(buf + 2, boundary, bl)) {
 				/* Malformed request */
-				mg_free(boundary);
 				return -1;
 			}
 			if (buf[bl + 2] != '\r' || buf[bl + 3] != '\n') {
@@ -729,7 +743,6 @@ mg_handle_form_request(struct mg_connection *conn,
 				if (((size_t)buf_fill != (size_t)(bl + 6))
 				    || (strncmp(buf + bl + 2, "--\r\n", 4))) {
 					/* Malformed request */
-					mg_free(boundary);
 					return -1;
 				}
 				/* End of the request */
@@ -741,7 +754,6 @@ mg_handle_form_request(struct mg_connection *conn,
 			hend = strstr(hbuf, "\r\n\r\n");
 			if (!hend) {
 				/* Malformed request */
-				mg_free(boundary);
 				return -1;
 			}
 
@@ -749,7 +761,6 @@ mg_handle_form_request(struct mg_connection *conn,
 			    parse_http_headers(&hbuf, part_header.http_headers);
 			if ((hend + 2) != hbuf) {
 				/* Malformed request */
-				mg_free(boundary);
 				return -1;
 			}
 
@@ -763,7 +774,6 @@ mg_handle_form_request(struct mg_connection *conn,
 			                          "Content-Disposition");
 			if (!content_disp) {
 				/* Malformed request */
-				mg_free(boundary);
 				return -1;
 			}
 
@@ -787,7 +797,6 @@ mg_handle_form_request(struct mg_connection *conn,
 				nend = strchr(nbeg, '\"');
 				if (!nend) {
 					/* Malformed request */
-					mg_free(boundary);
 					return -1;
 				}
 			} else {
@@ -799,7 +808,6 @@ mg_handle_form_request(struct mg_connection *conn,
 				}
 				if (!nbeg) {
 					/* Malformed request */
-					mg_free(boundary);
 					return -1;
 				}
 				nbeg += 5;
@@ -834,7 +842,6 @@ mg_handle_form_request(struct mg_connection *conn,
 				if (!fend) {
 					/* Malformed request (the filename field is optional, but if
 					 * it exists, it needs to be terminated correctly). */
-					mg_free(boundary);
 					return -1;
 				}
 
@@ -867,7 +874,6 @@ mg_handle_form_request(struct mg_connection *conn,
 			 * filename do not overlap. */
 			if (!(((ptrdiff_t)fbeg > (ptrdiff_t)nend)
 			      || ((ptrdiff_t)nbeg > (ptrdiff_t)fend))) {
-				mg_free(boundary);
 				return -1;
 			}
 
@@ -915,8 +921,7 @@ mg_handle_form_request(struct mg_connection *conn,
 
 				if (towrite < bl + 4) {
 					/* Not enough data stored. */
-					/* Incomplete request. */
-					mg_free(boundary);
+					/* Incomplete request. */					
 					return -1;
 				}
 
@@ -969,7 +974,7 @@ mg_handle_form_request(struct mg_connection *conn,
 				hend = buf;
 
 				/* Read new data */
-				to_read = sizeof(buf) - 1 - (size_t)buf_fill;
+				to_read = szbuf - 1 - (size_t)buf_fill;
 				r = mg_read(conn, buf + (size_t)buf_fill, to_read);
 				if ((r < 0) || ((r == 0) && all_data_read)) {
 #if !defined(NO_FILESYSTEMS)
@@ -978,8 +983,7 @@ mg_handle_form_request(struct mg_connection *conn,
 						mg_fclose(&fstore.access);
 						remove_bad_file(conn, path);
 					}
-#endif /* NO_FILESYSTEMS */
-					mg_free(boundary);
+#endif /* NO_FILESYSTEMS */					
 					return -1;
 				}
 				/* r==0 already handled, all_data_read is false here */
@@ -1063,7 +1067,7 @@ mg_handle_form_request(struct mg_connection *conn,
 			/* Remove from the buffer */
 			if (next) {
 				used = next - buf + 2;
-				memmove(buf, buf + (size_t)used, sizeof(buf) - (size_t)used);
+				memmove(buf, buf + (size_t)used, szbuf - (size_t)used);
 				buf_fill -= (int)used;
 			} else {
 				buf_fill = 0;
@@ -1071,7 +1075,6 @@ mg_handle_form_request(struct mg_connection *conn,
 		}
 
 		/* All parts handled */
-		mg_free(boundary);
 		return field_count;
 	}
 

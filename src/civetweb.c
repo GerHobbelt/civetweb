@@ -20,6 +20,8 @@
  * THE SOFTWARE.
  */
 
+#define CONFIG_CONNECT_TIMEOUT
+
 #if defined(__GNUC__) || defined(__MINGW32__)
 #define GCC_VERSION                                                            \
 	(__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
@@ -66,8 +68,16 @@
 #if !defined(_LARGEFILE_SOURCE)
 #define _LARGEFILE_SOURCE /* For fseeko(), ftello() */
 #endif
-#if !defined(_FILE_OFFSET_BITS)
-#define _FILE_OFFSET_BITS 64 /* Use 64-bit file offsets by default */
+#ifndef _FILE_OFFSET_BITS
+  #if defined(ANDROID)
+    #if (__ANDROID_API__ < 24)
+      #define _FILE_OFFSET_BITS 32 /* Use 32-bit file offsets for Android api lower than 24 */
+    #else
+      #define _FILE_OFFSET_BITS 64 /* Use 64-bit file offsets by default */
+    #endif
+  #else
+    #define _FILE_OFFSET_BITS 64 /* Use 64-bit file offsets by default */
+  #endif
 #endif
 #if !defined(__STDC_FORMAT_MACROS)
 #define __STDC_FORMAT_MACROS /* <inttypes.h> wants this for C++ */
@@ -89,6 +99,11 @@
 #pragma GCC diagnostic pop
 #endif
 
+/* for sendfile() usage in MACH */
+#if defined(__MACH__)
+ #include <TargetConditionals.h>
+ #include <sys/uio.h>
+#endif
 
 #if defined(USE_LUA)
 #define USE_TIMERS
@@ -132,22 +147,8 @@ mg_static_assert(sizeof(void *) == 4 || sizeof(void *) == 8,
 mg_static_assert(sizeof(void *) >= sizeof(int), "data type size check");
 
 
-/* Select queue implementation. Diagnosis features originally only implemented
- * for the "ALTERNATIVE_QUEUE" have been ported to the previous queue
- * implementation (NO_ALTERNATIVE_QUEUE) as well. The new configuration value
- * "CONNECTION_QUEUE_SIZE" is only available for the previous queue
- * implementation, since the queue length is independent from the number of
- * worker threads there, while the new queue is one element per worker thread.
- *
- */
-#if defined(NO_ALTERNATIVE_QUEUE) && defined(ALTERNATIVE_QUEUE)
-/* The queues are exclusive or - only one can be used. */
-#error                                                                         \
-    "Define ALTERNATIVE_QUEUE or NO_ALTERNATIVE_QUEUE (or none of them), but not both"
-#endif
-#if !defined(NO_ALTERNATIVE_QUEUE) && !defined(ALTERNATIVE_QUEUE)
-/* Use a default implementation */
-#define NO_ALTERNATIVE_QUEUE
+#if !defined(ALTERNATIVE_QUEUE)
+#define ALTERNATIVE_QUEUE
 #endif
 
 #if defined(NO_FILESYSTEMS) && !defined(NO_FILES)
@@ -437,6 +438,16 @@ _civet_safe_clock_gettime(int clk_id, struct timespec *t)
 
 #endif
 
+#include <time.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <assert.h>
+#include <string.h>
+#include <ctype.h>
+#include <limits.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdint.h>
 
 #if !defined(_WIN32)
 /* Unix might return different error codes indicating to try again.
@@ -456,11 +467,19 @@ _civet_safe_clock_gettime(int clk_id, struct timespec *t)
 /* CivetWeb configuration defines */
 /********************************************************************/
 
+#ifndef INT64_MAX
+#define INT64_MAX (9223372036854775807)
+#endif
+
 /* Maximum number of threads that can be configured.
  * The number of threads actually created depends on the "num_threads"
  * configuration parameter, but this is the upper limit. */
 #if !defined(MAX_WORKER_THREADS)
-#define MAX_WORKER_THREADS (1024 * 64) /* in threads (count) */
+#define MAX_WORKER_THREADS (256) /* in threads (count) */
+#endif
+
+#ifndef MAX_PERSISTENT_WORKER_THREADS
+#define MAX_PERSISTENT_WORKER_THREADS 2
 #endif
 
 /* Timeout interval for select/poll calls.
@@ -630,6 +649,9 @@ typedef const char *SOCK_OPT_TYPE;
 #if !defined(W_OK)
 #define W_OK (2) /* http://msdn.microsoft.com/en-us/library/1w06ktdy.aspx */
 #endif
+#if !defined(EWOULDBLOCK)
+#define EWOULDBLOCK WSAEWOULDBLOCK
+#endif /* !EWOULDBLOCK */
 #define _POSIX_
 #define INT64_FMT "I64d"
 #define UINT64_FMT "I64u"
@@ -1004,7 +1026,7 @@ timegm(struct tm *tm)
 #if defined(_WIN32)
 /* Create substitutes for POSIX functions in Win32. */
 
-#if defined(GCC_DIAGNOSTIC)
+#if defined(GCC_DIAGNOSTIC) || defined(__MINGW32__)
 /* Show no warning in case system functions are not used. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
@@ -1488,7 +1510,9 @@ mg_realloc(void *a, size_t b)
 static __inline void
 mg_free(void *a)
 {
+    if (a) {
 	free(a);
+    }
 }
 
 #define mg_malloc_ctx(a, c) mg_malloc(a)
@@ -1571,6 +1595,7 @@ static int mg_openssl_initialized = 0;
 
 static pthread_key_t sTlsKey; /* Thread local storage index */
 static volatile ptrdiff_t thread_idx_max = 0;
+static volatile ptrdiff_t tmp_thread_idx_max = MAX_PERSISTENT_WORKER_THREADS + 1;
 
 #if defined(MG_LEGACY_INTERFACE)
 #define MG_ALLOW_USING_GET_REQUEST_INFO_FOR_RESPONSE
@@ -1918,7 +1943,7 @@ enum {
 	LINGER_TIMEOUT,
 	CONNECTION_QUEUE_SIZE,
 	LISTEN_BACKLOG_SIZE,
-#if defined(__linux__)
+#if defined(__linux__) || (defined(TARGET_OS_OSX) && defined(MACOS_SENDFILE))
 	ALLOW_SENDFILE_CALL,
 #endif
 #if defined(_WIN32)
@@ -1928,6 +1953,9 @@ enum {
 	ENABLE_KEEP_ALIVE,
 	REQUEST_TIMEOUT,
 	KEEP_ALIVE_TIMEOUT,
+#ifdef CONFIG_CONNECT_TIMEOUT
+        CONNECT_TIMEOUT,
+#endif
 #if defined(USE_WEBSOCKET)
 	WEBSOCKET_TIMEOUT,
 	ENABLE_WEBSOCKET_PING_PONG,
@@ -2057,7 +2085,7 @@ static const struct mg_option config_options[] = {
     {"linger_timeout_ms", MG_CONFIG_TYPE_NUMBER, NULL},
     {"connection_queue", MG_CONFIG_TYPE_NUMBER, "20"},
     {"listen_backlog", MG_CONFIG_TYPE_NUMBER, "200"},
-#if defined(__linux__)
+#if defined(__linux__) || (defined(TARGET_OS_OSX) && defined(MACOS_SENDFILE))
     {"allow_sendfile_call", MG_CONFIG_TYPE_BOOLEAN, "yes"},
 #endif
 #if defined(_WIN32)
@@ -2067,8 +2095,11 @@ static const struct mg_option config_options[] = {
     {"enable_keep_alive", MG_CONFIG_TYPE_BOOLEAN, "no"},
     {"request_timeout_ms", MG_CONFIG_TYPE_NUMBER, "30000"},
     {"keep_alive_timeout_ms", MG_CONFIG_TYPE_NUMBER, "500"},
+#ifdef CONFIG_CONNECT_TIMEOUT
+    {"connect_timeout_ms", MG_CONFIG_TYPE_NUMBER, "10000"},
+#endif
 #if defined(USE_WEBSOCKET)
-    {"websocket_timeout_ms", MG_CONFIG_TYPE_NUMBER, NULL},
+    {"websocket_timeout_ms", MG_CONFIG_TYPE_NUMBER, "30000"},
     {"enable_websocket_ping_pong", MG_CONFIG_TYPE_BOOLEAN, "no"},
 #endif
     {"decode_url", MG_CONFIG_TYPE_BOOLEAN, "yes"},
@@ -2319,6 +2350,7 @@ struct mg_context {
 	int context_type; /* See CONTEXT_* above */
 
 	struct socket *listening_sockets;
+        mg_conn_stop_ctx listen_stop;
 	struct mg_pollfd *listening_socket_fds;
 	unsigned int num_listening_sockets;
 
@@ -2337,6 +2369,7 @@ struct mg_context {
 	/* Thread related */
 	stop_flag_t stop_flag;        /* Should we stop event loop */
 	pthread_mutex_t thread_mutex; /* Protects client_socks or queue */
+        volatile ptrdiff_t cur_tmp_workers; /* current temporary worker threads */
 
 	pthread_t masterthreadid; /* The master thread ID */
 	unsigned int
@@ -2348,19 +2381,7 @@ struct mg_context {
 #if defined(ALTERNATIVE_QUEUE)
 	struct socket *client_socks;
 	void **client_wait_events;
-#else
-	struct socket *squeue; /* Socket queue (sq) : accepted sockets waiting for a
-	                       worker thread */
-	volatile int sq_head;  /* Head of the socket queue */
-	volatile int sq_tail;  /* Tail of the socket queue */
-	pthread_cond_t sq_full;  /* Signaled when socket is produced */
-	pthread_cond_t sq_empty; /* Signaled when socket is consumed */
-	volatile int sq_blocked; /* Status information: sq is full */
-	int sq_size;             /* No of elements in socket queue */
-#if defined(USE_SERVER_STATS)
-	int sq_max_fill;
-#endif /* USE_SERVER_STATS */
-#endif /* ALTERNATIVE_QUEUE */
+#endif
 
 	/* Memory related */
 	unsigned int max_request_size; /* The max request size */
@@ -2530,8 +2551,16 @@ struct mg_connection {
 	void *lua_websocket_state; /* Lua_State for a websocket connection */
 #endif
 
+	int if_err ;   /* error in bound network interface for conn->client.sock */
+	int thread_index; /* Thread index within ctx */
+	time_t rx_time ;   /* time when data was read from conn->client.sock */
+	//int rx_partial_ms ;   /* pull_all to return with partial read data, if set and time elapsed */
+	int rx_partial_bytes ;  /* pull_all to return with partial read data, if set */
+	#define RX_SZ_32K 32768
+	char rxfbuf[RX_SZ_32K + 1] ; /* buffer used by mg_handle_form_request */
 	void *tls_user_ptr; /* User defined pointer in thread local storage,
 	                     * for quick access */
+        struct mg_conn_stop_ctx * psctrl;
 };
 
 
@@ -2542,6 +2571,17 @@ struct de {
 	struct mg_file_stat file;
 };
 
+
+#if defined(USE_WEBSOCKET)
+static int is_websocket_protocol(const struct mg_connection *conn);
+#else
+#define is_websocket_protocol(conn) (0)
+#endif
+
+static int set_sock_connect_timeout_ms(SOCKET sd, int timeout_ms);
+static int connect_socket_with_timeout(SOCKET sd, struct sockaddr * pSaddr, socklen_t addrLen,
+                                        int timeout_ms, struct mg_conn_stop_ctx * psctrl,
+                                        char *conn_err, int conn_err_len);
 
 #define mg_cry_internal(conn, fmt, ...)                                        \
 	mg_cry_internal_wrap(conn, NULL, __func__, __LINE__, fmt, __VA_ARGS__)
@@ -2575,10 +2615,7 @@ typedef struct tagTHREADNAME_INFO {
 
 #include <sys/prctl.h>
 #include <sys/sendfile.h>
-#if defined(ALTERNATIVE_QUEUE)
 #include <sys/eventfd.h>
-#endif /* ALTERNATIVE_QUEUE */
-
 
 #if defined(ALTERNATIVE_QUEUE)
 
@@ -2662,7 +2699,6 @@ event_destroy(void *eventhdl)
 	close(evhdl);
 	mg_free(eventhdl);
 }
-
 
 #endif
 
@@ -2951,6 +2987,24 @@ mg_fclose(struct mg_file_access *fileacc)
 	int ret = -1;
 	if (fileacc != NULL) {
 		if (fileacc->fp != NULL) {
+#if defined(__linux__)
+			int fd = fileno(fileacc->fp);
+		/*
+			POSIX_FADV_DONTNEED (non binding) requests the kernel to attempt
+			to free, cached pages of a file (referred by its open file descriptor),
+			that has already been used. This helps to free file pages from memory
+			that are no more needed, giving room for much needed pages.
+		*/
+			if (fd > 0) {
+				int rc = 0;
+				//fdatasync(fd);
+				rc = posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+				//if (rc < 0) {
+				//	printf("%s() fd=%d posix_fadvise err=%d %s \n",
+				//	__func__,fd,errno,strerror(errno));
+				//}
+			}
+#endif
 			ret = fclose(fileacc->fp);
 		}
 		/* reset all members of fileacc */
@@ -3471,9 +3525,7 @@ mg_cry(const struct mg_connection *conn, const char *fmt, ...)
 	va_end(ap);
 }
 
-
-#define mg_cry DO_NOT_USE_THIS_FUNCTION__USE_mg_cry_internal
-
+//#define mg_cry DO_NOT_USE_THIS_FUNCTION__USE_mg_cry_internal
 
 const char *
 mg_version(void)
@@ -4866,7 +4918,6 @@ pthread_cond_destroy(pthread_cond_t *cv)
 
 
 #if defined(ALTERNATIVE_QUEUE)
-FUNCTION_MAY_BE_UNUSED
 static void *
 event_create(void)
 {
@@ -4874,7 +4925,6 @@ event_create(void)
 }
 
 
-FUNCTION_MAY_BE_UNUSED
 static int
 event_wait(void *eventhdl)
 {
@@ -4883,7 +4933,6 @@ event_wait(void *eventhdl)
 }
 
 
-FUNCTION_MAY_BE_UNUSED
 static int
 event_signal(void *eventhdl)
 {
@@ -4891,7 +4940,6 @@ event_signal(void *eventhdl)
 }
 
 
-FUNCTION_MAY_BE_UNUSED
 static void
 event_destroy(void *eventhdl)
 {
@@ -5907,13 +5955,13 @@ static int
 mg_poll(struct mg_pollfd *pfd,
         unsigned int n,
         int milliseconds,
-        const stop_flag_t *stop_flag)
+        const stop_flag_t *stop_flag, struct mg_connection *conn)
 {
 	/* Call poll, but only for a maximum time of a few seconds.
 	 * This will allow to stop the server after some seconds, instead
 	 * of having to wait for a long socket timeout. */
 	int ms_now = SOCKET_TIMEOUT_QUANTUM; /* Sleep quantum in ms */
-
+       //int ms_partial = 0 ;
 	int check_pollerr = 0;
 	if ((n == 1) && ((pfd[0].events & POLLERR) == 0)) {
 		/* If we wait for only one file descriptor, wait on error as well */
@@ -5926,6 +5974,12 @@ mg_poll(struct mg_pollfd *pfd,
 
 		if (!STOP_FLAG_IS_ZERO(&*stop_flag)) {
 			/* Shut down signal */
+			return -2;
+		}
+
+                if (conn && conn->psctrl && (conn->psctrl->stop_now > 0)) {
+                     //printf("%s() psctrl->stop_now conn=%p ctx=%p \n",__func__,conn,conn->phys_ctx);
+			/* per connection Shut down signal */
 			return -2;
 		}
 
@@ -5949,6 +6003,19 @@ mg_poll(struct mg_pollfd *pfd,
 		/* Poll returned timeout (0). */
 		if (milliseconds > 0) {
 			milliseconds -= ms_now;
+			if(conn && (conn->if_err > 0)) {
+				break ;
+			}
+		/*
+			//rx_partial_ms: return when partial timeout expires, if set
+			//so that pull_all can return with partial reads within this interim timeouts.
+			//if (conn && (conn->rx_partial_ms > 0)) {
+				//ms_partial += ms_now ;
+				//if (ms_partial >= conn->rx_partial_ms) {
+				//	break;
+				//}
+			//}
+		*/
 		}
 
 	} while (milliseconds > 0);
@@ -6106,7 +6173,7 @@ push_inner(struct mg_context *ctx,
 
 			pfd[0].fd = sock;
 			pfd[0].events = POLLOUT;
-			pollres = mg_poll(pfd, 1, (int)(ms_wait), &(ctx->stop_flag));
+			pollres = mg_poll(pfd, 1, (int)(ms_wait), &(ctx->stop_flag),NULL);
 			if (!STOP_FLAG_IS_ZERO(&ctx->stop_flag)) {
 				return -2;
 			}
@@ -6130,6 +6197,169 @@ push_inner(struct mg_context *ctx,
 	return -1;
 }
 
+/*
+mg_ws_blocked_write() is adapted from mg_write, push_all and push_inner functions.
+It preserves the original logic -- with fixing issues, and handling corner cases.
+conn->client.sock is expected to be in blocking mode.
+*/
+int
+mg_ws_blocked_write(struct mg_connection *conn, const char *buf, int len)
+{
+	int n = 0 , err = 0 , serr = 0;
+	int nwritten = 0 ;
+	struct mg_context *ctx = NULL ;
+	SOCKET sock = 0 ;
+	SSL *ssl = NULL ;
+
+#ifdef _WIN32
+	typedef int len_t;
+#else
+	typedef size_t len_t;
+#endif
+
+	if ((conn == NULL)||( buf == NULL )||(len <= 0)) {
+		return -2;
+	}
+
+	sock = conn->client.sock ;
+	ctx = conn->phys_ctx ;
+	ssl = conn->ssl ;
+
+	if (ctx == NULL) {
+		return -2;
+	}
+
+#ifdef NO_SSL
+	if (ssl) {
+		return -2;
+	}
+#endif
+        //move this call to set ws socket blocking at connect time
+	//set_blocking_mode(sock);
+
+	while ((len > 0) && (ctx->stop_flag == 0)) {
+		err = 0 ; //reset
+		serr = 0 ;
+		errno = 0 ;
+#ifndef NO_SSL
+		if (ssl != NULL) {
+			n = SSL_write(ssl, buf + nwritten, (int)len);
+			if (n <= 0) {
+				serr = SSL_get_error(ssl, n);
+				err = (n < 0) ? ERRNO : 0;
+				if (serr == SSL_ERROR_SYSCALL) {
+
+					#if defined(_WIN32) || defined(_WIN64)
+					//err = WSAGetLastError();
+					if ((err == WSAEWOULDBLOCK) || (err == WSAEINTR))
+					#else
+					//err = errno;
+					if ((err == EAGAIN) || (err == EWOULDBLOCK) || (err == EINTR))
+					#endif
+					{
+						//unlikely in blocked socket to get EAGAIN/EWOULDBLOCK, but check
+						//need to re-try SSL_write with same arguments, for safeguard
+						struct timespec tslp = {0, 20000000};
+						// may be sleep for 20 ms before trying again
+						nanosleep(&tslp, NULL);
+						//printf("%s(ERR1-continue):sock=%d SSL_write() failed,"
+						//	" len=%d n=%d nwritten=%d SSLerr=%d err=%d %s\n",
+						//	__func__,sock,len,n,nwritten,serr,err,strerror(err));
+						continue;
+					}
+					else {
+						//printf("%s(ERR2-return):sock=%d SSL_write() failed,"
+						//	" len=%d n=%d nwritten=%d SSLerr=%d err=%d %s\n",
+						//	__func__,sock,len,n,nwritten,serr,err,strerror(err));
+						//Trigger OnClose closure
+						return WS_TUNNEL_TCP_SOCK_ERR;
+					}
+
+				} else if ((serr == SSL_ERROR_WANT_READ)
+					|| (serr == SSL_ERROR_WANT_WRITE)) {
+					//unlikely due to SSL_MODE_AUTO_RETRY, and blocked socket but check any how
+					//need to re-try SSL_write with same arguments
+					struct timespec tslp = {0, 20000000};
+					// may be sleep for 20 ms before trying again
+					nanosleep(&tslp, NULL);
+					//printf("%s(ERR3-continue):sock=%d SSL_write() failed,"
+					//	" len=%d n=%d nwritten=%d SSLerr=%d err=%d %s\n",
+					//	__func__,sock,len,n,nwritten,serr,err,strerror(err));
+					continue;
+				} else {
+					//printf("%s(ERR4-return):sock=%d SSL_write() failed,"
+					//	" len=%d n=%d nwritten=%d SSLerr=%d err=%d %s\n",
+					//	__func__,sock,len,n,nwritten,serr,err,strerror(err));
+						//Trigger OnClose closure
+					return WS_TUNNEL_TCP_SOCK_ERR;
+				}
+			} else {
+				//n > 0 case ;
+				nwritten += n;
+				len -= n;
+
+				//printf("%s(): sock=%d SSL_write() complete len=%d n=%d nwritten=%d\n",
+				//      __func__,sock,len,n,nwritten);
+				continue ;
+			}
+		} else
+#endif
+		{
+			n = (int)send(sock, buf + nwritten, (len_t)len, MSG_NOSIGNAL);
+			if (n < 0) {
+					err = ERRNO;
+
+					#if defined(_WIN32) || defined(_WIN64)
+					//err = WSAGetLastError();
+					if ((err == WSAEWOULDBLOCK) || (err == WSAEINTR))
+					#else
+					//err = errno;
+					if ((err == EAGAIN) || (err == EWOULDBLOCK) || (err == EINTR))
+					#endif
+					{
+						//unlikely in blocked socket to get EAGAIN/EWOULDBLOCK, but check
+						//need to re-try send() , for safeguard
+						struct timespec tslp = {0, 20000000};
+						// may be sleep for 20 ms before trying again
+						nanosleep(&tslp, NULL);
+						//printf("%s(ERR5-continue):sock=%d send() failed,"
+						//	" len=%d n=%d  nwritten=%d err=%d %s\n",
+						//	__func__,sock,len,n,nwritten,err,strerror(err));
+						continue;
+					}
+					else {
+						//printf("%s(ERR6-return):sock=%d send() failed,"
+						//	" len=%d n=%d  nwritten=%d err=%d %s\n",
+						//	__func__,sock,len,n,nwritten,err,strerror(err));
+						//Trigger OnClose closure
+						return WS_TUNNEL_TCP_SOCK_ERR;
+					}
+
+			} else if (n == 0) {
+					//printf("%s() send() == 0, sock=%d len=%d n=%d nwritten=%d\n",
+					//	__func__,sock,len,n,nwritten);
+					//Trigger OnClose closure
+					return WS_TUNNEL_TCP_SOCK_ERR;
+			
+			} else {
+				//n > 0 case ;
+				nwritten += n;
+				len -= n;
+
+				//printf("%s(): sock=%d send() complete len=%d n=%d nwritten=%d\n",__func__,sock,len,n,nwritten);
+
+				continue ;
+			}
+		}
+
+	} //end of while(len > 0)
+
+	if (nwritten > 0) {
+		conn->num_bytes_sent += nwritten;
+	}
+
+	return nwritten;
+}
 
 static int
 push_all(struct mg_context *ctx,
@@ -6158,7 +6388,7 @@ push_all(struct mg_context *ctx,
 		n = push_inner(ctx, fp, sock, ssl, buf + nwritten, len, timeout);
 		if (n < 0) {
 			if (nwritten == 0) {
-				nwritten = -1; /* Propagate the error */
+				nwritten = n; /* Propagate the error */
 			}
 			break;
 		} else if (n == 0) {
@@ -6269,9 +6499,10 @@ pull_inner(FILE *fp,
 
 #elif !defined(NO_SSL)
 	} else if (conn->ssl != NULL) {
-		int ssl_pending;
-		struct mg_pollfd pfd[1];
+               int ssl_pending;
+		struct mg_pollfd pfd[2] = {0};
 		int pollres;
+                int n = 1;
 
 		if ((ssl_pending = SSL_pending(conn->ssl)) > 0) {
 			/* We already know there is no more data buffered in conn->buf
@@ -6284,10 +6515,31 @@ pull_inner(FILE *fp,
 		} else {
 			pfd[0].fd = conn->client.sock;
 			pfd[0].events = POLLIN;
+                       if (conn->psctrl && (conn->psctrl->sd > 0)) {
+		          pfd[1].fd = conn->psctrl->sd;
+		          pfd[1].events = POLLIN;
+                          n++;
+                          //printf("%s() conn=%p ctx=%p added psctrl->sd=%d \n", __func__,conn,conn->phys_ctx,conn->psctrl->sd);
+                       }
 			pollres = mg_poll(pfd,
-			                  1,
+			                  n,
 			                  (int)(timeout * 1000.0),
-			                  &(conn->phys_ctx->stop_flag));
+			                  &(conn->phys_ctx->stop_flag),conn);
+                       if (conn->psctrl && (conn->psctrl->stop_now > 0)) {
+                         //printf("%s(STOP_NOW)  conn=%p ctx=%p stop_now\n", __func__,conn,conn->phys_ctx);
+ 
+                         //Drain the data just in case, also we can check if the
+                         //received data value is same as received from socket
+             		  if ((pollres > 0) && (conn->psctrl->sd > 0) && (n == 2) && (pfd[1].revents & POLLIN)) {
+                           int val = 0;
+                           int r = recvfrom(conn->psctrl->sd, (char *)&val, sizeof(int), 0, NULL, NULL);
+                           //if ( r < 0 ) {
+                               // printf("%s(STOP_NOW) conn=%p ctx=%p r=%d ERRNO=%d\n",__func__,conn,conn->phys_ctx,r,ERRNO);
+                           //}
+                           //printf("%s(STOP_NOW) conn=%p ctx=%p val=%d rsz=%d\n", __func__,conn,conn->phys_ctx,val,r);
+                         }
+                         return -2;
+		       }
 			if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
 				return -2;
 			}
@@ -6331,7 +6583,7 @@ pull_inner(FILE *fp,
 		pollres = mg_poll(pfd,
 		                  1,
 		                  (int)(timeout * 1000.0),
-		                  &(conn->phys_ctx->stop_flag));
+		                  &(conn->phys_ctx->stop_flag),conn);
 		if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
 			return -2;
 		}
@@ -6437,6 +6689,20 @@ pull_all(FILE *fp, struct mg_connection *conn, char *buf, int len)
 			if (timeout >= 0.0) {
 				now = mg_get_current_time_ns();
 				if ((now - start_time) <= timeout_ns) {
+					if(conn && (conn->if_err > 0)) {
+						break ;
+					}
+					//break if elapsed i/o wait time is more than rx_partial_ms,
+					//and has read rx_partial_bytes if set
+					/*
+					//if ((conn->rx_partial_ms > 0)&&(conn->rx_partial_bytes > 0)&&
+					//				(nread >= conn->rx_partial_bytes)) {
+					//	int ms_partial = (now - start_time) ;
+					//	if (ms_partial >= conn->rx_partial_ms) {
+					//		break;
+					//	}
+					//}
+					*/
 					continue;
 				}
 			}
@@ -6446,6 +6712,9 @@ pull_all(FILE *fp, struct mg_connection *conn, char *buf, int len)
 		} else {
 			nread += n;
 			len -= n;
+			if ((conn->rx_partial_bytes > 0) && (nread >= conn->rx_partial_bytes)) {
+				break ;
+			}
 		}
 	}
 
@@ -6582,9 +6851,34 @@ handle_request_stat_log(struct mg_connection *conn)
 #endif
 
 
+time_t mg_get_rx_time(struct mg_connection *conn)
+{
+	return conn && (conn->rx_time > 0) ? conn->rx_time : 0 ;
+}
+
+void mg_conn_set_if_err(struct mg_connection *conn, int val)
+{
+	if (conn) {
+		conn->if_err = val ;
+	}
+}
+
+void mg_set_partial_rx(struct mg_connection *conn, int msec, unsigned int bytes)
+{
+	if (!conn) {
+		return ;
+	}
+	//rx_partial_ms logic makes read_all to return with sub interval timeouts
+	//if(msec >= 0) {
+	//	conn->rx_partial_ms = msec ;
+	//}
+	conn->rx_partial_bytes = bytes ;
+}
+
 int
 mg_read(struct mg_connection *conn, void *buf, size_t len)
 {
+	int rc  = 0 ;
 	if (len > INT_MAX) {
 		len = INT_MAX;
 	}
@@ -6686,7 +6980,21 @@ mg_read(struct mg_connection *conn, void *buf, size_t len)
 
 		return (int)all_read;
 	}
-	return mg_read_inner(conn, buf, len);
+
+	if(conn->rx_time == 0) {
+		conn->rx_time = time(NULL);
+	}
+
+	rc = mg_read_inner(conn, buf, len);
+	if ((rc == 0) && (conn->if_err > 0)) {
+		//set rc to -1 on if_err
+		rc = -1 ;
+	}
+
+	if (rc > 0) {
+		conn->rx_time = time(NULL);
+	}
+	return rc ;
 }
 
 
@@ -6923,7 +7231,7 @@ mg_vprintf(struct mg_connection *conn, const char *fmt, va_list ap)
 	if ((len = alloc_vprintf(&buf, mem, sizeof(mem), fmt, ap)) > 0) {
 		len = mg_write(conn, buf, (size_t)len);
 	}
-	if (buf != mem) {
+	if ((buf != mem) && (buf != NULL)) {
 		mg_free(buf);
 	}
 
@@ -8978,7 +9286,7 @@ mg_inet_pton(int af, const char *src, void *dst, size_t dstlen, int resolve_src)
 	while (res) {
 		if ((dstlen >= (size_t)res->ai_addrlen)
 		    && (res->ai_addr->sa_family == af)) {
-			memcpy(dst, res->ai_addr, res->ai_addrlen);
+			memcpy(dst, res->ai_addr, (size_t)res->ai_addrlen);
 			func_ret = 1;
 		}
 		res = res->ai_next;
@@ -8988,29 +9296,168 @@ mg_inet_pton(int af, const char *src, void *dst, size_t dstlen, int resolve_src)
 	return func_ret;
 }
 
+//connect_socket_with_timeout() returns 0 on successful connect and -1 on connect failure or timeout
+// If conn_err buffer is not NULL it tries to fill with failed connection error details -- upto conn_err_len bytes.
+#define MG_STRING_ERR_CONNECT_PENDING_TIMEDOUT "pending connection not completed in requested timeout "
+#define MG_STRING_ERR_CONNECT_STOPPED "pending connection stop requested."
+#define MG_STRING_ERR_INVALID_PARM "invalid parameter. "
+static int connect_socket_with_timeout(SOCKET sd, struct sockaddr * pSaddr, socklen_t addrLen,
+                                        int timeout_ms, struct mg_conn_stop_ctx * psctrl,
+                                        char *conn_err, int conn_err_len)
+{
+    struct timeval tout = {0};
+    int rc = 0;
 
+    if (!pSaddr) {
+        if (conn_err && (conn_err_len > 0)) {
+	   mg_snprintf(NULL, NULL, conn_err, conn_err_len, "%s", MG_STRING_ERR_INVALID_PARM);
+        }
+	return -1;
+    }
+
+    //not needed, but may be better to set some(say 8 secs) select timeout(if not given)
+    tout.tv_sec = 8;
+
+    if (timeout_ms > 0) {
+	tout.tv_sec = timeout_ms / 1000;
+	tout.tv_usec = (timeout_ms % 1000) * 1000;
+    }
+
+     errno = 0;
+     rc = connect(sd, pSaddr, addrLen);
+     if (rc == 0) {
+	 //connect() success-1, unlikely if socket is non blocking.
+	 return 0;
+     }
+
+     if (rc < 0) {
+       int io_wait = 0;
+#ifndef _WIN32
+       io_wait = ((errno == EINPROGRESS) || (errno == 0)) ? 1 : 0;
+#else
+       int wsa_err = WSAGetLastError();
+       io_wait = ((wsa_err == WSAEINPROGRESS) || (wsa_err == WSAEWOULDBLOCK)) ? 1 : 0;
+#endif
+       if (io_wait > 0) {
+	 //connect() in progress, likely if socket is non blocking.
+	    fd_set writefd;
+            int num_sds = sd + 1;
+
+	    fd_set *psctrl_rdfd = NULL;
+	    fd_set ctrl_rdfd;
+
+	    FD_ZERO(&writefd);
+	    FD_SET(sd, &writefd);
+
+            if (psctrl) {
+	       if (psctrl->stop_now > 0) {
+		  /* per connection Shut down signal */
+		  // printf("%s(CONNECT_STOP_NOW) psctrl=%p psctrl->stop_now=%d \n",__func__,psctrl,psctrl->stop_now);
+		  if (conn_err && (conn_err_len > 0)) {
+		     mg_snprintf(NULL, NULL, conn_err, conn_err_len, "%s", MG_STRING_ERR_CONNECT_STOPPED);
+		  }
+		  return -1;
+	       }
+               if (psctrl->sd > 0) {
+	          FD_ZERO(&ctrl_rdfd);
+	          psctrl_rdfd = &ctrl_rdfd;
+	          FD_SET(psctrl->sd, psctrl_rdfd);
+                  if (psctrl->sd > sd) {
+                    //adjust num_sds if ctrl_sd is greater than sd to be monitored.
+                    num_sds = psctrl->sd + 1;
+                  }
+               }
+	    }
+	    rc = select(num_sds, psctrl_rdfd, &writefd, NULL, &tout);
+	    if ((rc > 0) && (FD_ISSET(sd, &writefd))) {
+#ifndef _WIN32
+	       int so_err = 0 ;
+	       socklen_t l = sizeof(so_err);
+		getsockopt(sd, SOL_SOCKET, SO_ERROR, &so_err, &l);
+		if (so_err == 0) {
+		   //connect() success-2, as indicated by select/sockopt
+		    return 0;
+		}
+		if (conn_err && (conn_err_len > 0)) {
+		   mg_snprintf(NULL, NULL, conn_err, conn_err_len, "%s", strerror(so_err));
+		}
+                return -1;
+	       //printf("\n%s() rc=%d sd=%d connect so_err=%d %s \n", __func__, rc, sd, so_err, strerror(so_err));
+#else
+	       //connect successful-WIN as indicated by select
+		return 0;
+#endif
+	    }
+
+            // check in select i/o connect wait has been signalled to return using psctrl control socket
+            if (psctrl && (psctrl->stop_now > 0)) {
+               //printf("%s(CONNECT_STOP_NOW)  psctrl=%p stop_now\n", __func__,psctrl);
+               //Drain the data for now, just in case. If needed we can also further validate received data.
+	       if (psctrl_rdfd && (rc > 0) && (psctrl->sd > 0) && (FD_ISSET(psctrl->sd, psctrl_rdfd))) {
+                  int val = 0;
+                  int r = recvfrom(psctrl->sd, (char *)&val, sizeof(int), 0, NULL, NULL);
+                   //if (r < 0) {
+                      //printf("%s(CONNECT_STOP_NOW) psctrl=%p r=%d ERRNO=%d\n",__func__,psctrl,r,ERRNO);
+                   //}
+                   //printf("%s(CONNECT_STOP_NOW) psctrl=%p val=%d rsz=%d\n", __func__,psctrl,val,r);
+               }
+
+	       if (conn_err && (conn_err_len > 0)) {
+		  mg_snprintf(NULL, NULL, conn_err, conn_err_len, "%s", MG_STRING_ERR_CONNECT_STOPPED);
+	       }
+
+               return -1;
+	   }
+
+	   if (rc == 0) {
+              //select i/o has timed-out
+              mg_snprintf(NULL, NULL, conn_err, conn_err_len, "%s(%d millisec).", MG_STRING_ERR_CONNECT_PENDING_TIMEDOUT, timeout_ms);
+              return -1;
+           }
+	}
+    }
+    if (conn_err && (conn_err_len > 0) && (ERRNO != 0)) {
+       //ERRNO is unlikely to be 0 here, but check before getting system error to string.
+       mg_snprintf(NULL, NULL, conn_err, conn_err_len, "%s", strerror(ERRNO));
+    }
+    return -1;
+}
+
+//connect_socket() function returns 1 on connect success and 0 on failure
 static int
-connect_socket(
-    struct mg_context *ctx /* may be NULL */,
-    const char *host,
-    int port,    /* 1..65535, or -99 for domain sockets (may be changed) */
-    int use_ssl, /* 0 or 1 */
-    char *ebuf,
-    size_t ebuf_len,
-    SOCKET *sock /* output: socket, must not be NULL */,
-    union usa *sa /* output: socket address, must not be NULL  */
+connect_socket(struct mg_context *ctx /* may be NULL */,
+               const struct mg_client_options *client_options,
+               int use_ssl,
+               char *ebuf,
+               size_t ebuf_len,
+               SOCKET *sock /* output: socket, must not be NULL */,
+               union usa *sa /* output: socket address, must not be NULL  */
 )
 {
 	int ip_ver = 0;
 	int conn_ret = -1;
-	int sockerr = 0;
-	*sock = INVALID_SOCKET;
+        #define MAX_CONN_ERR_SZ 255
+	char conn_err[MAX_CONN_ERR_SZ+1] = {0};
+	const char *host;
+        int port;
+        int timeout_ms = 0;
+        int domain = 0;
+        int rc = 0;
+        struct sockaddr * pSaddr = NULL;
+        socklen_t addrLen = 0;
+
+        *sock = INVALID_SOCKET;
 	memset(sa, 0, sizeof(*sa));
+
+        if (!client_options) {
+           return 0;
+        }
 
 	if (ebuf_len > 0) {
 		*ebuf = 0;
 	}
-
+        host = client_options->host;
+        port = client_options->port;
 	if (host == NULL) {
 		mg_snprintf(NULL,
 		            NULL, /* No truncation check for ebuf */
@@ -9116,19 +9563,32 @@ connect_socket(
 		return 0;
 	}
 
-	if (ip_ver == 4) {
-		*sock = socket(PF_INET, SOCK_STREAM, 0);
-	}
+        /* connected with IPv4 */
+        pSaddr = (struct sockaddr *)((void *)&sa->sin);
+        addrLen = sizeof(sa->sin);
+        domain = PF_INET;
+
 #if defined(USE_IPV6)
-	else if (ip_ver == 6) {
-		*sock = socket(PF_INET6, SOCK_STREAM, 0);
+	if (ip_ver == 6) {
+           /* connected with IPv6 */
+           //change value if ipv6
+           domain = PF_INET6;
+           pSaddr = (struct sockaddr *)((void *)&sa->sin6);
+           addrLen = sizeof(sa->sin6);
 	}
 #endif
 #if defined(USE_X_DOM_SOCKET)
 	else if (ip_ver == -99) {
-		*sock = socket(AF_UNIX, SOCK_STREAM, 0);
+                domain = AF_UNIX ;
+                pSaddr = (struct sockaddr *)((void *)&sa->sun);
+                addrLen = sizeof(sa->sun);	
 	}
 #endif
+          if (!pSaddr) {
+            return 0;
+        }
+
+	*sock = socket(domain, SOCK_STREAM, 0);
 
 	if (*sock == INVALID_SOCKET) {
 		mg_snprintf(NULL,
@@ -9140,102 +9600,37 @@ connect_socket(
 		return 0;
 	}
 
-	if (0 != set_non_blocking_mode(*sock)) {
-		mg_snprintf(NULL,
-		            NULL, /* No truncation check for ebuf */
-		            ebuf,
-		            ebuf_len,
-		            "Cannot set socket to non-blocking: %s",
-		            strerror(ERRNO));
-		closesocket(*sock);
-		*sock = INVALID_SOCKET;
-		return 0;
-	}
-
 	set_close_on_exec(*sock, NULL, ctx);
+        set_blocking_mode(*sock);
 
-	if (ip_ver == 4) {
-		/* connected with IPv4 */
-		conn_ret = connect(*sock,
-		                   (struct sockaddr *)((void *)&sa->sin),
-		                   sizeof(sa->sin));
-	}
-#if defined(USE_IPV6)
-	else if (ip_ver == 6) {
-		/* connected with IPv6 */
-		conn_ret = connect(*sock,
-		                   (struct sockaddr *)((void *)&sa->sin6),
-		                   sizeof(sa->sin6));
-	}
-#endif
-#if defined(USE_X_DOM_SOCKET)
-	else if (ip_ver == -99) {
-		/* connected to domain socket */
-		conn_ret = connect(*sock,
-		                   (struct sockaddr *)((void *)&sa->sun),
-		                   sizeof(sa->sun));
-	}
+#ifdef CONFIG_CONNECT_TIMEOUT
+        if (client_options->connect_timeout > 0) {
+            timeout_ms = client_options->connect_timeout;
+//          printf("The passing in CONNECT_TIMEOUT: %d ms\n", timeout_ms);
+        } else if (config_options[CONNECT_TIMEOUT].default_value) {
+            timeout_ms = atoi(config_options[CONNECT_TIMEOUT].default_value);
+//          printf("the default config CONNECT_TIMEOUT: %d ms\n", timeout_ms);
+        }
 #endif
 
-	if (conn_ret != 0) {
-		sockerr = ERRNO;
-	}
+        if (timeout_ms > 0) {
+           //for timed connect using synchronous I/O multiplexing, set the socket to non blocking mode
+           set_non_blocking_mode(*sock);
 
-#if defined(_WIN32)
-	if ((conn_ret != 0) && (sockerr == WSAEWOULDBLOCK)) {
-#else
-	if ((conn_ret != 0) && (sockerr == EINPROGRESS)) {
-#endif
-		/* Data for getsockopt */
-		void *psockerr = &sockerr;
-		int ret;
+           conn_ret = connect_socket_with_timeout(*sock, pSaddr, addrLen, timeout_ms, client_options->psctrl,
+                                                           conn_err, sizeof(conn_err));
 
-#if defined(_WIN32)
-		int len = (int)sizeof(sockerr);
-#else
-		socklen_t len = (socklen_t)sizeof(sockerr);
-#endif
-
-		/* Data for poll */
-		struct mg_pollfd pfd[1];
-		int pollres;
-		int ms_wait = 10000; /* 10 second timeout */
-		stop_flag_t nonstop;
-		STOP_FLAG_ASSIGN(&nonstop, 0);
-
-		/* For a non-blocking socket, the connect sequence is:
-		 * 1) call connect (will not block)
-		 * 2) wait until the socket is ready for writing (select or poll)
-		 * 3) check connection state with getsockopt
-		 */
-		pfd[0].fd = *sock;
-		pfd[0].events = POLLOUT;
-		pollres = mg_poll(pfd, 1, ms_wait, ctx ? &(ctx->stop_flag) : &nonstop);
-
-		if (pollres != 1) {
-			/* Not connected */
-			mg_snprintf(NULL,
-			            NULL, /* No truncation check for ebuf */
-			            ebuf,
-			            ebuf_len,
-			            "connect(%s:%d): timeout",
-			            host,
-			            port);
-			closesocket(*sock);
-			*sock = INVALID_SOCKET;
-			return 0;
-		}
-
-#if defined(_WIN32)
-		ret = getsockopt(*sock, SOL_SOCKET, SO_ERROR, (char *)psockerr, &len);
-#else
-		ret = getsockopt(*sock, SOL_SOCKET, SO_ERROR, psockerr, &len);
-#endif
-
-		if ((ret == 0) && (sockerr == 0)) {
-			conn_ret = 0;
-		}
-	}
+           //revert back to socket blocking mode as other operation needs it to be blocking
+           set_blocking_mode(*sock);
+        }
+        else {
+          //regular blocking connect
+	  conn_ret = connect(*sock, pSaddr, addrLen);
+          if ((conn_ret != 0) && (ERRNO != 0)) {
+              // get connection failure error
+              mg_snprintf(NULL, NULL, conn_err, sizeof(conn_err), "%s", strerror(ERRNO));
+          }
+        }
 
 	if (conn_ret != 0) {
 		/* Not connected */
@@ -9246,7 +9641,7 @@ connect_socket(
 		            "connect(%s:%d): error %s",
 		            host,
 		            port,
-		            strerror(sockerr));
+		            conn_err);
 		closesocket(*sock);
 		*sock = INVALID_SOCKET;
 		return 0;
@@ -9742,57 +10137,210 @@ send_file_data(struct mg_connection *conn,
 	                                      : (int64_t)(filep->stat.size);
 	offset = (offset < 0) ? 0 : ((offset > size) ? size : offset);
 
-	if (len > 0 && filep->access.fp != NULL) {
-		/* file stored on disk */
-#if defined(__linux__)
-		/* sendfile is only available for Linux */
+
+        {
+         //It is safe to enclose the following large single if statement in a block statement
+	   if (len > 0 && filep->access.fp != NULL) {
+/* file stored on disk */
+#if defined(__linux__) || (defined(TARGET_OS_OSX) && defined(MACOS_SENDFILE))
+		/* sendfile is only available for Linux and macOS */
 		if ((conn->ssl == 0) && (conn->throttle == 0)
 		    && (!mg_strcasecmp(conn->dom_ctx->config[ALLOW_SENDFILE_CALL],
 		                       "yes"))) {
 			off_t sf_offs = (off_t)offset;
-			ssize_t sf_sent;
+			ssize_t sf_sent = 0 ;
+			off_t slen = 0 ;
+			int rc2 = 0 ;
 			int sf_file = fileno(filep->access.fp);
-			int loop_cnt = 0;
+			int unavailablecnt = 0;
+			int sf_flag =  0 ;
+			#define SF_LEN_LIMIT (16 * 1024 * 1024)
+			size_t sf_limit = 0;
+			//time_t t1 = time(NULL);
+			//time_t t2 = 0 ;
 
+			if(len == INT64_MAX){
+				len = (int64_t)(filep->stat.size);
+			}
+			if(len < 0){ return ; }
+
+			//printf("%s() sendfile start: sock=%d len=%ld offset=%ld time=%ld sec\n",
+			//	__func__,conn->client.sock,len,offset,t1);
+
+#if (defined(TARGET_OS_OSX) && defined(MACOS_SENDFILE))
+ #if defined F_NOCACHE
+//Disable data caching to free up page cache occupied by file i/o
+	fcntl(sf_file,F_NOCACHE,1) ;
+	//if(fcntl(sf_file,F_NOCACHE,1) < 0) {
+		// printf("%s() err setting F_NOCACHE. file=%d len=%d err=%d %s \n",
+		//__func__,sf_file,len,errno, strerror(errno)) ;
+	//}
+ #endif
+ #if defined SF_NOCACHE
+//Tells the kernel that data is not be cached after sending
+	sf_flag = SF_NOCACHE ;
+	//printf("%s() SF_NOCACHE is used for sock=%d sf_file=%d len=%d\n",
+	//		__func__,conn->client.sock, sf_file,len);
+ #else
+	sf_limit = 0 ;
+	//Enable the following, if sending through sendfile needs to be limited
+	//sf_limit = len > SF_LEN_LIMIT ? SF_LEN_LIMIT : 0 ;
+ #endif
+#endif
 			do {
 				/* 2147479552 (0x7FFFF000) is a limit found by experiment on
 				 * 64 bit Linux (2^31 minus one memory page of 4k?). */
 				size_t sf_tosend =
 				    (size_t)((len < 0x7FFFF000) ? len : 0x7FFFF000);
+				errno = 0 ; /* errno reset not necessary, but safer as it is checked */
+#if defined(__linux__)
 				sf_sent =
 				    sendfile(conn->client.sock, sf_file, &sf_offs, sf_tosend);
 				if (sf_sent > 0) {
 					len -= sf_sent;
 					offset += sf_sent;
-				} else if (loop_cnt == 0) {
-					/* This file can not be sent using sendfile.
-					 * This might be the case for pseudo-files in the
-					 * /sys/ and /proc/ file system.
-					 * Use the regular user mode copy code instead. */
-					break;
-				} else if (sf_sent == 0) {
-					/* No error, but 0 bytes sent. May be EOF? */
-					return;
 				}
-				loop_cnt++;
+				else if (sf_sent < 0) {
+					/* sendfile returns < 0 */
+					if((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
+					/* Most Likely: sendfile() EAGAIN or EWOULDBLOCK, wait on poll and try again.
+					  The intent is to maximize the usage of sendfile */
+						struct pollfd p_fd;
+						int prc = 0 ;
+						unavailablecnt++;
+						#define RETRY_POLLWAIT_MS 250
+						p_fd.fd = conn->client.sock ;
+						p_fd.revents = 0 ;
+						p_fd.events = POLLOUT | POLLERR | POLLHUP | POLLNVAL;
+						/* Using poll here to wait for event on sendfile socket */
+						prc = poll(&p_fd, 1, RETRY_POLLWAIT_MS) ;
+						if(prc < 0) {
+							/* poll error, break to try classic way of sending */
+							break;
+						}
+						/* continue loop to try sendfile now */
+						continue;
+					}
+					else {
+						/* printf("%s() sock=%d sf_sent=%ld len=%ld offset=%ld sendfile error=%d , %s\n",
+						__func__,conn->client.sock,sf_sent,len,offset, errno, strerror(errno)); */
 
-			} while ((len > 0) && (sf_sent >= 0));
+						/* sendfile other errors, break and try classic way of sending */
+						break;
+					}
+				}
+				else {
+					/* unlikely: sendfile returns 0, break and try classic way of sending */
+					break;
+				}
+//disable sendfile for iOS and enable it only for macOS
+#elif (defined(TARGET_OS_OSX) && defined(MACOS_SENDFILE))
 
-			if (sf_sent > 0) {
+/* The number of bytes sent is returned by sendfile in macOS via slen */
+/* update what has been sent */
+
+#define MAC_SENDFILE_UPDATE(slen){ \
+					sf_sent = slen ; \
+					sf_offs += slen ; \
+				        len -= sf_sent; \
+				        offset += sf_sent; \
+				}
+
+/*
+macOS sendfile() different from linux sendfile() interface
+https://developer.apple.com/legacy/library/documentation/Darwin/Reference/ManPages/man2/sendfile.2.html
+https://man.openbsd.org/FreeBSD-11.1/sendfile.2
+*/
+				rc2 = 0 ;
+				sf_sent = 0 ;
+				if((sf_limit > 0) && (sf_limit < sf_tosend)) {
+					sf_tosend = sf_limit ;
+					if(sf_offs >= sf_limit) {
+						//printf("%s() len=%d sf_offs=%d sf_limit=%d reached \n",
+						//	__func__,len,sf_offs,sf_limit);
+						break ;
+					}
+				}
+				slen = sf_tosend ;
+				rc2 = sendfile(sf_file,conn->client.sock,sf_offs,&slen,NULL,sf_flag);
+				if(rc2 == 0){
+				/*
+			           The sendfile() in macOS returns 0 if successful; otherwise -1 is returned 
+				*/
+					if(slen > 0){
+						/* The number of bytes sent is returned by sendfile in macOS via slen */
+						/* update what has been sent */
+						MAC_SENDFILE_UPDATE(slen)
+					}
+					else if ( slen == 0 ){
+						/*
+						It is EITHER: All file data has been sent, and EOF is reached.
+						OR: offset was invalid pointing beyond EOF and sendfile did not send anything
+						*/
+						//printf("send_file_data() __MACH__ sendfile: sock=%d slen=%d offset=%ld \n",
+								//conn->client.sock,slen,offset);
+						return ;
+					}
+				}
+				else if (rc2 < 0) {
+					/* sendfile returns < 0 */
+					if((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
+					/* Most Likely: sendfile() EAGAIN or EWOULDBLOCK, wait on poll and try again.
+					  The intent is to maximize the usage of sendfile */
+						struct pollfd p_fd;
+						int prc = 0 ;
+						if(slen > 0){
+							/* The number of bytes sent is returned by sendfile in macOS via slen */
+							/* update what has been sent */
+							MAC_SENDFILE_UPDATE(slen)
+						}
+						unavailablecnt++;
+						#define RETRY_POLLWAIT_MS 250
+						p_fd.fd = conn->client.sock ;
+						p_fd.revents = 0 ;
+						p_fd.events = POLLOUT | POLLERR | POLLHUP | POLLNVAL;
+						/* Using poll here to wait for event on sendfile socket */
+						prc = poll(&p_fd, 1, RETRY_POLLWAIT_MS) ;
+						if(prc < 0) {
+							/* poll error, break to try classic way of sending */
+							break;
+						}
+						/* continue loop to try sendfile now */
+						continue;
+					}
+					else {
+						/* sendfile other errors, break and try classic way of sending */
+						if((slen > 0) && (errno == EINTR)){
+							/* The number of bytes sent is returned by sendfile in macOS via slen */
+							/* update what has been sent */
+							MAC_SENDFILE_UPDATE(slen)
+						}
+						break;
+					}
+				}
+#endif
+
+			} while (len > 0);
+
+           		//t2 = time(NULL);
+			//printf("%s() sendfile summary: sf_sent=%ld rc2=%d sock=%d time=%ldsec tdiff => %ld sec"
+			//	" pending_len=%ld sf_offs=%ld offset=%ld "
+			//	"sf_limit=%d sf_flag=%d EAGAIN-unavailable count=%d \n",
+			//	__func__,sf_sent,rc2,conn->client.sock,t2,t2-t1,
+			//	len,sf_offs,offset,sf_limit,sf_flag,unavailablecnt);
+
+			if (len <= 0) {
 				return; /* OK */
 			}
 
-			/* sf_sent<0 means error, thus fall back to the classic way */
+			/* if len > 0 still , fall back to the classic way */
 			/* This is always the case, if sf_file is not a "normal" file,
 			 * e.g., for sending data from the output of a CGI process. */
 			offset = (int64_t)sf_offs;
 		}
 #endif
 		if ((offset > 0) && (fseeko(filep->access.fp, offset, SEEK_SET) != 0)) {
-			mg_cry_internal(conn,
-			                "%s: fseeko() failed: %s",
-			                __func__,
-			                strerror(ERRNO));
+			printf("%s: fseeko() failed: %s \n", __func__, strerror(ERRNO));
 			mg_send_http_error(
 			    conn,
 			    500,
@@ -9823,9 +10371,10 @@ send_file_data(struct mg_connection *conn,
 				len -= num_written;
 			}
 		}
-	}
-}
+	   } //end of filep->access.fp != NULL
 
+        } //end of block statement in else part
+}
 
 static int
 parse_range_header(const char *header, int64_t *a, int64_t *b)
@@ -10817,6 +11366,9 @@ read_message(FILE *fp,
 
 	request_len = get_http_header_len(buf, *nread);
 
+	/* first time reading from this connection */
+	clock_gettime(CLOCK_MONOTONIC, &last_action_time);
+
 	while (request_len == 0) {
 		/* Full request not yet received */
 		if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
@@ -10835,10 +11387,6 @@ read_message(FILE *fp,
 			/* Receive error */
 			return -1;
 		}
-
-		/* update clock after every read request */
-		clock_gettime(CLOCK_MONOTONIC, &last_action_time);
-
 		if (n > 0) {
 			*nread += n;
 			request_len = get_http_header_len(buf, *nread);
@@ -10850,6 +11398,7 @@ read_message(FILE *fp,
 				/* Timeout */
 				return -1;
 			}
+			clock_gettime(CLOCK_MONOTONIC, &last_action_time);
 		}
 	}
 
@@ -12868,23 +13417,35 @@ mg_websocket_write_exec(struct mg_connection *conn,
 		headerLen += 4;
 	}
 
-	retval = mg_write(conn, header, headerLen);
-	if (retval != (int)headerLen) {
-		/* Did not send complete header */
-		retval = -1;
-	} else {
-		if (dataLen > 0) {
+       retval = mg_ws_blocked_write(conn, (const char *)header, (int)headerLen);
+
+	/* mg_ws_blocked_write() returns only when a sincere attempt to
+	successfully send the header happens. However if it fails, to send
+	the header or fails after sending a partial header, it will return
+	an error(WS_TUNNEL_TCP_SOCK_ERR) less than 0. And we do not write the
+	data in that case.  WS_TUNNEL_TCP_SOCK_ERR error will be handled by
+	the upper layer who is calling this function to tear down the connection.
+        */
+
+	/* send data, only on successfully sending the header */
+	if ((dataLen > 0) && (retval >= headerLen)) {
 #if defined(USE_ZLIB) && defined(MG_EXPERIMENTAL_INTERFACES)
-			if (use_deflate) {
-				retval = mg_write(conn, deflated, dataLen);
-				mg_free(deflated);
-			} else
+		if (use_deflate) {
+		  retval = mg_write(conn, deflated, dataLen);		
+		} else
 #endif
-				retval = mg_write(conn, data, dataLen);
-		}
-		/* if dataLen == 0, the header length (2) is returned */
+               {
+		  retval = mg_ws_blocked_write(conn, data, (int)dataLen);
+               }
 	}
 
+	
+#if defined(USE_ZLIB) && defined(MG_EXPERIMENTAL_INTERFACES)
+	if (use_deflate && deflated) {
+		mg_free(deflated);
+	} 
+#endif
+				
 	/* TODO: Remove this unlock as well, when lock is removed. */
 	mg_unlock_connection(conn);
 
@@ -12926,6 +13487,32 @@ mask_data(const char *in, size_t in_len, uint32_t masking_key, char *out)
 	}
 }
 
+/*
+  mg_ws_get_clinet_sock_bound_addr() gets bounded ipv4 or ipv6 address of conn->client.socket
+  - copies struct sockaddr into passed struct sockaddr * pto, if not NULL
+  - For ipv4 socket, also returns its bounded ipv4 unsigned 32 bit network byte ordered address
+*/
+unsigned int
+mg_ws_get_client_sock_bound_addr(struct mg_connection *conn, void *pto)
+{
+	struct sockaddr to;
+	socklen_t l = sizeof(struct sockaddr);
+	
+        if(!pto) {
+		pto = &to ;
+	}
+	memset(pto, 0, sizeof(struct sockaddr));
+	if((conn) || (conn->client.sock > 0)) {
+		int rc = 0 ;
+		/* get sock bound tuple address using getsockname() */
+		rc = getsockname(conn->client.sock, (struct sockaddr*)pto, &l);
+                if((rc == 0) && (((struct sockaddr*)pto)->sa_family == AF_INET)) {
+			//returning s_addr if IPV4: for backward compatability of this function usage
+			return ((struct sockaddr_in *)pto)->sin_addr.s_addr;
+		}
+	}
+	return 0 ;
+}
 
 int
 mg_websocket_client_write(struct mg_connection *conn,
@@ -14852,6 +15439,209 @@ parse_port_string(const struct vec *vec, struct socket *so, int *ip_version)
 	return 0;
 }
 
+static int set_sock_connect_timeout(SOCKET sd, int sec)
+{
+  int rc = 0;
+#if defined(_WIN32) || defined(_WIN64)
+  DWORD tout = sec * 1000;  //WINDOWS needs timeout in miliiseconds
+#else
+  struct timeval tout;
+  tout.tv_sec = sec;
+  tout.tv_usec = 0;
+#endif
+  rc = setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, (char *)&tout, sizeof(tout));
+  return rc;
+}
+
+static int set_sock_connect_timeout_ms(SOCKET sd, int timeout_ms)
+{
+  int rc = 0;
+#if defined(_WIN32) || defined(_WIN64)
+  DWORD tout = timeout_ms; //WINDOWS needs timeout in miliiseconds
+#else
+  struct timeval tout = {0};
+  if(timeout_ms > 0) {
+     tout.tv_sec = timeout_ms / 1000;
+     tout.tv_usec = (timeout_ms % 1000) * 1000;
+  }
+ #endif
+  rc = setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, (char *)&tout, sizeof(tout));
+
+  /* TCP_USER_TIMEOUT for connect() timeout works fine in recent Linux kernel(5.3.0-64-generic)
+     but NOT in older kernel release (4.4.0-142-gneric) */
+  //rc = setsockopt(sd, IPPROTO_TCP, TCP_USER_TIMEOUT, (char *)&timeout_ms, sizeof(timeout_ms));
+
+  return rc;
+}
+
+static int connect_to_wakeup_master(SOCKET lsd)
+{
+   SOCKET sd = INVALID_SOCKET;
+   struct sockaddr_in serv_addr;
+   struct sockaddr_in to_addr;
+#if defined(_WIN32) || defined(_WIN64)
+   int len = sizeof(serv_addr);
+#else
+   socklen_t len = sizeof(serv_addr);
+#endif
+   int rc = 0 ;
+
+   if ((lsd == INVALID_SOCKET) || (lsd == 0)) {
+     return -1;
+   }
+
+   memset(&serv_addr, 0, sizeof(serv_addr));
+   rc = getsockname(lsd, (struct sockaddr *)&serv_addr, &len);
+   if(rc < 0) {
+       return -1;
+   }
+
+   sd = socket(AF_INET, SOCK_STREAM, 0);
+   if (sd == INVALID_SOCKET) {
+     return -1;
+   }
+
+   memset(&to_addr, 0, sizeof(to_addr));
+   to_addr.sin_family = AF_INET;
+   to_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+   to_addr.sin_port = serv_addr.sin_port;
+
+   // set sd to non blocking as we do not want the following connect to block
+   set_non_blocking_mode(sd);
+
+   // Do not worry about connect error here, as it is just an attempt,
+   // to wake master listen thread from blocking accept() call.
+   rc = connect_socket_with_timeout(sd, (struct sockaddr *)&to_addr, sizeof(to_addr), 10, NULL, NULL, 0);
+   // if (rc < 0) {
+   //     printf("%s() err in connecting to wakeup listener at port=%u, err=%ld %s \n",
+   //              __func__,ntohs(serv_addr.sin_port),ERRNO,strerror(ERRNO));
+   // }
+
+   shutdown(sd, SHUTDOWN_WR);
+   closesocket(sd);
+
+   return rc;
+}
+
+//NOTE do not worry about any socket error, it is only an
+//additional attempt to wakeup from pull_inner() faster
+int mg_conn_stop_ctx_init(struct mg_conn_stop_ctx *psctrl, int immediate)
+{
+   if (!psctrl) {
+     return -1;
+   }
+
+   memset(psctrl, 0, sizeof(struct mg_conn_stop_ctx));
+
+   if (immediate) {
+
+      // initialize i/o notification through udp socket 
+      // bind to a random port
+      SOCKET sd = INVALID_SOCKET;
+      struct sockaddr_in bound_addr;
+      struct sockaddr_in src_addr;
+      #if defined(_WIN32) || defined(_WIN64)
+      int len = sizeof(bound_addr);
+      #else
+      socklen_t len = sizeof(bound_addr);
+      #endif
+      int rc = 0 ;
+      unsigned short bport = 0;
+
+      sd = socket(AF_INET, SOCK_DGRAM, 0);
+      if (sd == INVALID_SOCKET) {
+	//printf("%s(), socket creation failed , ERRNO = %d \n", __func__,(int)ERRNO);
+	return -1;
+      }
+
+      // set sd to non blocking as we do not want to block on this ctrl socket 
+      set_non_blocking_mode(sd);
+
+      // bind socket to get a name associated with it.
+      memset(&src_addr, 0, sizeof(src_addr));
+      src_addr.sin_family = AF_INET;
+      src_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      src_addr.sin_port = htons(0);
+      rc = bind(sd, (struct sockaddr *)&src_addr, sizeof(src_addr));
+      if (rc < 0) {
+	 //printf("%s(), bind failed , ERRNO = %d \n", __func__,(int)ERRNO);
+	 closesocket(sd);
+	 return -1;
+      }
+
+      rc = getsockname(sd, (struct sockaddr *)&bound_addr, &len);
+      if (rc < 0) {
+	 //printf("%s(), getsockname failed , ERRNO = %d \n", __func__,(int)ERRNO);
+	 closesocket(sd);
+	 return -1;
+      }
+      bport = ntohs(bound_addr.sin_port);
+
+      //printf("%s() sd=%d bounded to port=%u \n",__func__,sd, bport);
+
+      if (bport > 0) {
+	 psctrl->bound_port = bport;
+      }
+      else {
+	 closesocket(sd);
+	 return -1;
+      }
+      psctrl->sd = sd;
+  }
+
+   return 0;
+}
+
+int mg_signal_stop_ctx(struct mg_conn_stop_ctx *psctrl)
+{
+
+   struct sockaddr_in to_addr;
+   int rc = 0 ;
+
+   if (!psctrl) {
+     return -1;
+   }
+
+   //first:  set stop_now to 1;
+   psctrl->stop_now = 1 ;
+   
+   //second: try to send some data, so that poll will wake up
+   if ((psctrl->sd > 0) && (psctrl->bound_port > 0)) {
+      //self send a udp with its 4 bytes sd value as payload
+      struct sockaddr_in to_addr;
+      memset(&to_addr, 0, sizeof(to_addr));
+      to_addr.sin_family = AF_INET;
+      to_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      to_addr.sin_port = htons(psctrl->bound_port);
+      rc = sendto(psctrl->sd, (char *)&psctrl->sd, sizeof(int), 0,
+              (struct sockaddr *)&to_addr, sizeof(to_addr));
+      if (rc < 0) {
+          //printf("%s(), sendto failed , ERRNO = %d \n", __func__,(int)ERRNO);
+          return -1;
+      }
+      //printf("%s(), sent successfully rc = %d \n", __func__,rc);
+   }
+
+   return 0;
+}
+
+int mg_close_stop_ctx(struct mg_conn_stop_ctx *psctrl)
+{
+
+   if (!psctrl) {
+     return -1;
+   }
+
+   if (psctrl->sd > 0) {
+      //printf("%s(), closing sd = %d \n", __func__,psctrl->sd );
+      closesocket(psctrl->sd);
+   }
+
+   memset(psctrl, 0, sizeof(struct mg_conn_stop_ctx));
+   psctrl->sd = INVALID_SOCKET; 
+
+   return 0;
+}
 
 /* Is there any SSL port in use? */
 static int
@@ -15190,9 +15980,10 @@ set_ports_option(struct mg_context *phys_ctx)
 			continue;
 		}
 
+		// add 1 more pollfd slot for listen_stop socket
 		if ((pfd = (struct mg_pollfd *)
 		         mg_realloc_ctx(phys_ctx->listening_socket_fds,
-		                        (phys_ctx->num_listening_sockets + 1)
+		                        (phys_ctx->num_listening_sockets + 2)
 		                            * sizeof(phys_ctx->listening_socket_fds[0]),
 		                        phys_ctx))
 		    == NULL) {
@@ -15713,8 +16504,7 @@ sslize(struct mg_connection *conn,
 					              || (err == SSL_ERROR_WANT_WRITE))
 					                 ? POLLOUT
 					                 : POLLIN;
-					pollres =
-					    mg_poll(&pfd, 1, 50, &(conn->phys_ctx->stop_flag));
+					pollres = mg_poll(&pfd, 1, 50, &(conn->phys_ctx->stop_flag), conn);
 					if (pollres < 0) {
 						/* Break if error occured (-1)
 						 * or server shutdown (-2) */
@@ -17045,6 +17835,16 @@ close_connection(struct mg_connection *conn)
 		conn->lua_websocket_state = NULL;
 	}
 #endif
+	//reset conn->if_err and conn->rx_time
+	conn->if_err = 0 ;
+	conn->rx_time = 0 ;
+	//conn->rx_partial_ms = 0 ;
+	conn->rx_partial_bytes = 0 ;
+
+        if (conn->psctrl) {
+           //printf("%s() conn=%p conn->psctrl=%p\n",__func__,conn,conn->psctrl);
+           mg_close_stop_ctx(conn->psctrl);
+        }
 
 	mg_lock_connection(conn);
 
@@ -17137,7 +17937,9 @@ mg_close_connection(struct mg_connection *conn)
 
 		/* join worker thread */
 		for (i = 0; i < conn->phys_ctx->cfg_worker_threads; i++) {
+                    if (conn->phys_ctx->worker_threadids[i] != 0) {
 			mg_join_thread(conn->phys_ctx->worker_threadids[i]);
+                    }
 		}
 	}
 #endif /* defined(USE_WEBSOCKET) */
@@ -17220,9 +18022,13 @@ mg_connect_client_impl(const struct mg_client_options *client_options,
 	conn->phys_ctx->context_type = CONTEXT_HTTP_CLIENT;
 	conn->dom_ctx = &(conn->phys_ctx->dd);
 
+        // printf("%s() conn=%p ctx=%p psctrl=%p\n",__func__,conn,conn->phys_ctx,client_options->psctrl);
+
+        // update stop_ctrl pointer if given in option
+        conn->psctrl = client_options->psctrl;
+
 	if (!connect_socket(conn->phys_ctx,
-	                    client_options->host,
-	                    client_options->port,
+	                    client_options,
 	                    use_ssl,
 	                    ebuf,
 	                    ebuf_len,
@@ -17233,6 +18039,10 @@ mg_connect_client_impl(const struct mg_client_options *client_options,
 		mg_free(conn);
 		return NULL;
 	}
+conn->dom_ctx->config[REQUEST_TIMEOUT] = "20000";
+#if defined(USE_WEBSOCKET)
+conn->dom_ctx->config[WEBSOCKET_TIMEOUT] = "10000";
+#endif
 
 #if !defined(NO_SSL) && !defined(USE_MBEDTLS) // TODO: mbedTLS client
 #if (defined(OPENSSL_API_1_1) || defined(OPENSSL_API_3_0))                     \
@@ -17326,6 +18136,7 @@ mg_connect_client_impl(const struct mg_client_options *client_options,
 				            "Can not use SSL client certificate");
 				SSL_CTX_free(conn->dom_ctx->ssl_ctx);
 				closesocket(sock);
+		                (void)pthread_mutex_destroy(&conn->mutex);
 				mg_free(conn);
 				return NULL;
 			}
@@ -17341,6 +18152,7 @@ mg_connect_client_impl(const struct mg_client_options *client_options,
 				                ssl_error());
 				SSL_CTX_free(conn->dom_ctx->ssl_ctx);
 				closesocket(sock);
+		                (void)pthread_mutex_destroy(&conn->mutex);
 				mg_free(conn);
 				return NULL;
 			}
@@ -17357,8 +18169,16 @@ mg_connect_client_impl(const struct mg_client_options *client_options,
 			            "SSL connection error");
 			SSL_CTX_free(conn->dom_ctx->ssl_ctx);
 			closesocket(sock);
+		        (void)pthread_mutex_destroy(&conn->mutex);
 			mg_free(conn);
 			return NULL;
+		}
+
+		if (conn->client.sock > 0) {
+			//SSL_MODE_AUTO_RETRY helps with SSL_ERROR_WANT_READ, if underlying BIO is blocking
+			SSL_set_mode(conn->ssl, SSL_MODE_AUTO_RETRY);
+			//printf("%s() sock=%d conn->ssl=%x setting SSL_MODE_AUTO_RETRY \n",
+			//	__func__,conn->client.sock,conn->ssl);
 		}
 	}
 #endif
@@ -17379,6 +18199,20 @@ mg_connect_client_secure(const struct mg_client_options *client_options,
 }
 
 
+
+struct mg_connection *
+mg_connect_client_mimik(const struct mg_client_options *client_options,
+                  int use_ssl,
+                  char *error_buffer,
+                  size_t error_buffer_size)
+{
+	return mg_connect_client_impl(client_options,
+	                              use_ssl,
+	                              error_buffer,
+	                              error_buffer_size);
+}
+
+
 struct mg_connection *
 mg_connect_client(const char *host,
                   int port,
@@ -17390,6 +18224,7 @@ mg_connect_client(const char *host,
 	memset(&opts, 0, sizeof(opts));
 	opts.host = host;
 	opts.port = port;
+
 	return mg_connect_client_impl(&opts,
 	                              use_ssl,
 	                              error_buffer,
@@ -18084,6 +18919,7 @@ websocket_client_thread(void *data)
 	DEBUG_TRACE("%s", "Websocket client thread exited\n");
 
 	if (cdata->close_handler != NULL) {
+		//printf("ws client thread exiting - calling close_handler .\n");
 		cdata->close_handler(cdata->conn, cdata->callback_data);
 	}
 
@@ -18450,6 +19286,12 @@ init_connection(struct mg_connection *conn)
 	conn->connection_type = CONNECTION_TYPE_INVALID;
 	mg_set_user_connection_data(conn, NULL);
 
+	//reset conn->if_err and conn->rx_time
+	conn->if_err = 0 ;
+	conn->rx_time = 0 ;
+	//conn->rx_partial_ms = 0 ;
+	conn->rx_partial_bytes = 0 ;
+
 #if defined(USE_SERVER_STATS)
 	conn->conn_state = 2; /* init */
 #endif
@@ -18659,35 +19501,79 @@ process_new_connection(struct mg_connection *conn)
 #endif
 }
 
+struct tmp_worker_thread_args {
+	struct mg_context *ctx;
+	struct socket client;     
+};
+#ifdef _WIN32
+static unsigned __stdcall tmp_worker_thread(void *thread_func_param) ;
+#else
+static void * tmp_worker_thread(void *thread_func_param) ;
+#endif /* _WIN32 */
+
+static void
+spin_tmp_worker(struct mg_context *ctx, const struct socket *sp)
+{
+	if (ctx && sp && (ctx->cur_tmp_workers < MAX_WORKER_THREADS)) {
+		/* start temporary worker thread with correct sock param. */
+		struct tmp_worker_thread_args *twta =
+		(struct tmp_worker_thread_args *)mg_calloc_ctx(1,
+		sizeof(struct tmp_worker_thread_args), ctx);
+		if (!twta) {
+		    printf("calloc failed for twta error %ld",(long)ERRNO);
+		    closesocket(sp->sock);
+		    return ;
+		}
+
+		//populate thread args param with ctx and sock.
+		twta->ctx = ctx;
+		memcpy(&twta->client,sp,sizeof(twta->client));
+
+		if (mg_start_thread(tmp_worker_thread, twta) != 0) {
+			//log thread failure, close sock
+		   closesocket(sp->sock);
+		   mg_free(twta);
+		   printf("Cannot create threads: error %ld",(long)ERRNO);
+		}
+	}
+	return ;
+}
 
 #if defined(ALTERNATIVE_QUEUE)
-
 static void
 produce_socket(struct mg_context *ctx, const struct socket *sp)
 {
 	unsigned int i;
 
-	while (!ctx->stop_flag) {
+	if ((ctx == NULL) || (sp == NULL)) {
+		return ;
+	}
+
+	while (ctx->stop_flag == 0) {
+
+		/* First try limited(2) persistent worker threads */
 		for (i = 0; i < ctx->cfg_worker_threads; i++) {
 			/* find a free worker slot and signal it */
-			if (ctx->client_socks[i].in_use == 2) {
-				(void)pthread_mutex_lock(&ctx->thread_mutex);
-				if ((ctx->client_socks[i].in_use == 2) && !ctx->stop_flag) {
-					ctx->client_socks[i] = *sp;
-					ctx->client_socks[i].in_use = 1;
-					/* socket has been moved to the consumer */
-					(void)pthread_mutex_unlock(&ctx->thread_mutex);
-					(void)event_signal(ctx->client_wait_events[i]);
-					return;
-				}
-				(void)pthread_mutex_unlock(&ctx->thread_mutex);
+                        (void)pthread_mutex_lock(&ctx->thread_mutex);
+			if (ctx->client_socks[i].in_use != 1) {
+				ctx->client_socks[i] = *sp;
+				ctx->client_socks[i].in_use = 1;
+                                (void)pthread_mutex_unlock(&ctx->thread_mutex);
+				event_signal(ctx->client_wait_events[i]);
+				return;
 			}
+                        (void)pthread_mutex_unlock(&ctx->thread_mutex);
+		}
+
+		/* Now try temporary worker threads */
+		if (ctx->cur_tmp_workers < MAX_WORKER_THREADS) {
+			spin_tmp_worker(ctx, sp);
+			return ;
 		}
 		/* queue is full */
-		mg_sleep(1);
+		mg_sleep(50); //re-try after 50 msec and not in just 1 msec 
 	}
-	/* must consume */
-	set_blocking_mode(sp->sock);
+	/* close the accepted socket in case if the process does not exit*/
 	closesocket(sp->sock);
 }
 
@@ -18695,113 +19581,29 @@ produce_socket(struct mg_context *ctx, const struct socket *sp)
 static int
 consume_socket(struct mg_context *ctx, struct socket *sp, int thread_index)
 {
+        if (ctx->stop_flag != 0) {
+           // do not proceed with socket consumption if stop is requested for this context
+           return 0;
+        }
 	DEBUG_TRACE("%s", "going idle");
-	(void)pthread_mutex_lock(&ctx->thread_mutex);
-	ctx->client_socks[thread_index].in_use = 2;
-	(void)pthread_mutex_unlock(&ctx->thread_mutex);
+        (void)pthread_mutex_lock(&ctx->thread_mutex);
+	ctx->client_socks[thread_index].in_use = 0;
+        (void)pthread_mutex_unlock(&ctx->thread_mutex);
 
 	event_wait(ctx->client_wait_events[thread_index]);
 
-	(void)pthread_mutex_lock(&ctx->thread_mutex);
+        (void)pthread_mutex_lock(&ctx->thread_mutex);
 	*sp = ctx->client_socks[thread_index];
-	if (ctx->stop_flag) {
-		(void)pthread_mutex_unlock(&ctx->thread_mutex);
-		if (sp->in_use == 1) {
-			/* must consume */
-			set_blocking_mode(sp->sock);
-			closesocket(sp->sock);
-		}
-		return 0;
+        (void)pthread_mutex_unlock(&ctx->thread_mutex);
+
+	 if (ctx->stop_flag) {
+           if (sp->sock > 0) {
+	      closesocket(sp->sock);
+	      return 0;
+           }
 	}
-	(void)pthread_mutex_unlock(&ctx->thread_mutex);
-	if (sp->in_use == 1) {
-		DEBUG_TRACE("grabbed socket %d, going busy", sp->sock);
-		return 1;
-	}
-	/* must not reach here */
-	DEBUG_ASSERT(0);
-	return 0;
-}
-
-#else /* ALTERNATIVE_QUEUE */
-
-/* Worker threads take accepted socket from the queue */
-static int
-consume_socket(struct mg_context *ctx, struct socket *sp, int thread_index)
-{
-	(void)thread_index;
-
-	(void)pthread_mutex_lock(&ctx->thread_mutex);
-	DEBUG_TRACE("%s", "going idle");
-
-	/* If the queue is empty, wait. We're idle at this point. */
-	while ((ctx->sq_head == ctx->sq_tail)
-	       && (STOP_FLAG_IS_ZERO(&ctx->stop_flag))) {
-		pthread_cond_wait(&ctx->sq_full, &ctx->thread_mutex);
-	}
-
-	/* If we're stopping, sq_head may be equal to sq_tail. */
-	if (ctx->sq_head > ctx->sq_tail) {
-		/* Copy socket from the queue and increment tail */
-		*sp = ctx->squeue[ctx->sq_tail % ctx->sq_size];
-		ctx->sq_tail++;
-
-		DEBUG_TRACE("grabbed socket %d, going busy", sp ? sp->sock : -1);
-
-		/* Wrap pointers if needed */
-		while (ctx->sq_tail > ctx->sq_size) {
-			ctx->sq_tail -= ctx->sq_size;
-			ctx->sq_head -= ctx->sq_size;
-		}
-	}
-
-	(void)pthread_cond_signal(&ctx->sq_empty);
-	(void)pthread_mutex_unlock(&ctx->thread_mutex);
-
-	return STOP_FLAG_IS_ZERO(&ctx->stop_flag);
-}
-
-
-/* Master thread adds accepted socket to a queue */
-static void
-produce_socket(struct mg_context *ctx, const struct socket *sp)
-{
-	int queue_filled;
-
-	(void)pthread_mutex_lock(&ctx->thread_mutex);
-
-	queue_filled = ctx->sq_head - ctx->sq_tail;
-
-	/* If the queue is full, wait */
-	while (STOP_FLAG_IS_ZERO(&ctx->stop_flag)
-	       && (queue_filled >= ctx->sq_size)) {
-		ctx->sq_blocked = 1; /* Status information: All threads busy */
-#if defined(USE_SERVER_STATS)
-		if (queue_filled > ctx->sq_max_fill) {
-			ctx->sq_max_fill = queue_filled;
-		}
-#endif
-		(void)pthread_cond_wait(&ctx->sq_empty, &ctx->thread_mutex);
-		ctx->sq_blocked = 0; /* Not blocked now */
-		queue_filled = ctx->sq_head - ctx->sq_tail;
-	}
-
-	if (queue_filled < ctx->sq_size) {
-		/* Copy socket to the queue and increment head */
-		ctx->squeue[ctx->sq_head % ctx->sq_size] = *sp;
-		ctx->sq_head++;
-		DEBUG_TRACE("queued socket %d", sp ? sp->sock : -1);
-	}
-
-	queue_filled = ctx->sq_head - ctx->sq_tail;
-#if defined(USE_SERVER_STATS)
-	if (queue_filled > ctx->sq_max_fill) {
-		ctx->sq_max_fill = queue_filled;
-	}
-#endif
-
-	(void)pthread_cond_signal(&ctx->sq_full);
-	(void)pthread_mutex_unlock(&ctx->thread_mutex);
+        DEBUG_TRACE("grabbed socket %d, going busy",sp->sock);
+	return !ctx->stop_flag;
 }
 #endif /* ALTERNATIVE_QUEUE */
 
@@ -19030,6 +19832,234 @@ worker_thread_run(struct mg_connection *conn)
 	DEBUG_TRACE("%s", "exiting");
 }
 
+/* tmp_worker_thread_run() has been adapted from worker_thread_run() */
+static void *
+tmp_worker_thread_run(struct tmp_worker_thread_args *thread_args)
+{
+	struct mg_context *ctx = NULL ;
+	struct mg_connection *conn = NULL ;
+	struct mg_workerTLS tls;
+
+	if ((!thread_args) || (!thread_args->ctx)) {
+		return NULL ;
+	}
+
+	ctx = thread_args->ctx;
+	mg_set_thread_name("worker");
+
+	tls.is_master = 0;
+	tls.thread_idx = (unsigned)mg_atomic_inc(&thread_idx_max);
+#if defined(_WIN32)
+	tls.pthread_cond_helper_mutex = CreateEvent(NULL, FALSE, FALSE, NULL);
+#endif
+
+	/* Initialize thread local storage before calling any callback */
+	pthread_setspecific(sTlsKey, &tls);
+
+	/* Check if there is a user callback */
+	if (ctx->callbacks.init_thread) {
+		/* call init_thread for a worker thread (type 1), and store the
+		 * return value */
+		tls.user_ptr = ctx->callbacks.init_thread(ctx, 1);
+	} else {
+		/* No callback: set user pointer to NULL */
+		tls.user_ptr = NULL;
+	}
+
+	conn = (struct mg_connection *)mg_calloc_ctx(1,sizeof(struct mg_connection),ctx);
+	if (conn == NULL) {
+	       mg_cry_ctx_internal(ctx,"%s","Not enough memory for worker thread connection array");
+	       pthread_setspecific(sTlsKey, NULL);
+	       return NULL;
+	}
+
+	conn->buf = (char *)mg_malloc_ctx(ctx->max_request_size, ctx);
+	if (conn->buf == NULL) {
+		mg_free(conn);
+	        mg_cry_ctx_internal(ctx,
+		       "Out of memory: Cannot allocate buffer for worker sz=%d",
+		       ctx->max_request_size);
+		pthread_setspecific(sTlsKey, NULL);
+		return NULL;
+	}
+
+	mg_atomic_inc(&ctx->cur_tmp_workers);
+
+	//printf("Temp worker thread(%ld) started ... cur_tmp_workers=%d \n",
+	//		tls.thread_idx,ctx->cur_tmp_workers);
+	
+	conn->buf_size = (int)ctx->max_request_size;
+
+	conn->phys_ctx = ctx;
+	conn->dom_ctx = &(ctx->dd); /* Use default domain and default host */
+
+	conn->tls_user_ptr = tls.user_ptr; /* store ptr for quick access */
+
+	conn->request_info.user_data = ctx->user_data;
+	/* Allocate a mutex for this connection to allow communication both
+	 * within the request handler and from elsewhere in the application
+	 */
+	(void)pthread_mutex_init(&conn->mutex, &pthread_mutex_attr);
+
+#if defined(USE_SERVER_STATS)
+	conn->conn_state = 1; /* not consumed */
+#endif
+
+        //VERY IMPORTANT copy conn->client from thread param.
+	memcpy(&conn->client, &thread_args->client,sizeof(conn->client));
+
+		/* New connections must start with new protocol negotiation */
+		tls.alpn_proto = NULL;
+
+#if defined(USE_SERVER_STATS)
+		conn->conn_close_time = 0;
+#endif
+		conn->conn_birth_time = time(NULL);
+
+		/* Fill in IP, port info early so even if SSL setup below fails,
+		 * error handler would have the corresponding info.
+		 * Thanks to Johannes Winkelmann for the patch.
+		 */
+		conn->request_info.remote_port =
+		    ntohs(USA_IN_PORT_UNSAFE(&conn->client.rsa));
+
+		conn->request_info.server_port =
+		    ntohs(USA_IN_PORT_UNSAFE(&conn->client.lsa));
+
+		sockaddr_to_string(conn->request_info.remote_addr,
+		                   sizeof(conn->request_info.remote_addr),
+		                   &conn->client.rsa);
+
+		DEBUG_TRACE("Incomming %sconnection from %s",
+		            (conn->client.is_ssl ? "SSL " : ""),
+		            conn->request_info.remote_addr);
+
+		conn->request_info.is_ssl = conn->client.is_ssl;
+
+		if (conn->client.is_ssl) {
+
+#if defined(USE_MBEDTLS)
+			/* HTTPS connection */
+			if (mbed_ssl_accept(&(conn->ssl),
+			                    conn->dom_ctx->ssl_ctx,
+			                    (int *)&(conn->client.sock),
+			                    conn->phys_ctx)
+			    == 0) {
+				/* conn->dom_ctx is set in get_request */
+				/* process HTTPS connection */
+				init_connection(conn);
+				conn->connection_type = CONNECTION_TYPE_REQUEST;
+				conn->protocol_type = PROTOCOL_TYPE_HTTP1;
+				process_new_connection(conn);
+			} else {
+				/* make sure the connection is cleaned up on SSL failure */
+				close_connection(conn);
+			}
+
+#elif !defined(NO_SSL)
+			/* HTTPS connection */
+			if (sslize(conn, SSL_accept, NULL)) {
+				/* conn->dom_ctx is set in get_request */
+
+				/* Get SSL client certificate information (if set) */
+				struct mg_client_cert client_cert;
+				if (ssl_get_client_cert_info(conn, &client_cert)) {
+					conn->request_info.client_cert = &client_cert;
+				}
+
+				/* process HTTPS connection */
+#if defined(USE_HTTP2)
+				if ((tls.alpn_proto != NULL)
+				    && (!memcmp(tls.alpn_proto, "\x02h2", 3))) {
+					/* process HTTPS/2 connection */
+					init_connection(conn);
+					conn->connection_type = CONNECTION_TYPE_REQUEST;
+					conn->protocol_type = PROTOCOL_TYPE_HTTP2;
+					conn->content_len =
+					    -1;               /* content length is not predefined */
+					conn->is_chunked = 0; /* HTTP2 is never chunked */
+					process_new_http2_connection(conn);
+				} else
+#endif
+				{
+					/* process HTTPS/1.x or WEBSOCKET-SECURE connection */
+					init_connection(conn);
+					conn->connection_type = CONNECTION_TYPE_REQUEST;
+					/* Start with HTTP, WS will be an "upgrade" request later */
+					conn->protocol_type = PROTOCOL_TYPE_HTTP1;
+					process_new_connection(conn);
+				}
+
+				/* Free client certificate info */
+				if (conn->request_info.client_cert) {
+					mg_free((void *)(conn->request_info.client_cert->subject));
+					mg_free((void *)(conn->request_info.client_cert->issuer));
+					mg_free((void *)(conn->request_info.client_cert->serial));
+					mg_free((void *)(conn->request_info.client_cert->finger));
+					/* Free certificate memory */
+					X509_free(
+					    (X509 *)conn->request_info.client_cert->peer_cert);
+					conn->request_info.client_cert->peer_cert = 0;
+					conn->request_info.client_cert->subject = 0;
+					conn->request_info.client_cert->issuer = 0;
+					conn->request_info.client_cert->serial = 0;
+					conn->request_info.client_cert->finger = 0;
+					conn->request_info.client_cert = 0;
+				}
+			} else {
+				/* make sure the connection is cleaned up on SSL failure */
+				close_connection(conn);
+			}
+#endif
+
+		} else {
+			/* process HTTP connection */
+			init_connection(conn);
+			conn->connection_type = CONNECTION_TYPE_REQUEST;
+			/* Start with HTTP, WS will be an "upgrade" request later */
+			conn->protocol_type = PROTOCOL_TYPE_HTTP1;
+			process_new_connection(conn);
+		}
+
+		DEBUG_TRACE("%s", "Connection closed");
+
+#if defined(USE_SERVER_STATS)
+		conn->conn_close_time = time(NULL);
+#endif
+	
+
+	/* Call exit thread user callback */
+	if (ctx->callbacks.exit_thread) {
+		ctx->callbacks.exit_thread(ctx, 1, tls.user_ptr);
+	}
+
+	/* delete thread local storage objects */
+	pthread_setspecific(sTlsKey, NULL);
+#if defined(_WIN32)
+	CloseHandle(tls.pthread_cond_helper_mutex);
+#endif
+	pthread_mutex_destroy(&conn->mutex);
+
+	/* Free the request buffer. */
+	conn->buf_size = 0;
+	mg_free(conn->buf);
+	conn->buf = NULL;
+
+	/* Free cleaned URI (if any) */
+	if (conn->request_info.local_uri != conn->request_info.local_uri_raw) {
+		mg_free((void *)conn->request_info.local_uri);
+		conn->request_info.local_uri = NULL;
+	}
+
+#if defined(USE_SERVER_STATS)
+	conn->conn_state = 9; /* done */
+#endif
+	mg_free(conn);
+	mg_atomic_dec(&ctx->cur_tmp_workers);
+	//printf("Temp worker thread(%ld) finished.  \n",tls.thread_idx);
+	return NULL;
+}
+
 
 /* Threads have different return types on Windows and Unix. */
 #if defined(_WIN32)
@@ -19037,6 +20067,14 @@ static unsigned __stdcall worker_thread(void *thread_func_param)
 {
 	worker_thread_run((struct mg_connection *)thread_func_param);
 	return 0;
+}
+static unsigned __stdcall tmp_worker_thread(void *thread_func_param)
+{
+    tmp_worker_thread_run((struct tmp_worker_thread_args *)thread_func_param);
+    if (thread_func_param) {
+	mg_free(thread_func_param);
+    }
+    return 0;
 }
 #else
 static void *
@@ -19053,6 +20091,15 @@ worker_thread(void *thread_func_param)
 
 	worker_thread_run((struct mg_connection *)thread_func_param);
 	return NULL;
+}
+static void *
+tmp_worker_thread(void *thread_func_param)
+{
+    tmp_worker_thread_run((struct tmp_worker_thread_args *)thread_func_param);
+    if (thread_func_param) {
+	mg_free(thread_func_param);
+    }
+    return NULL;
 }
 #endif /* _WIN32 */
 
@@ -19079,6 +20126,7 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 		                    __func__,
 		                    src_addr);
 		closesocket(so.sock);
+                return;
 	} else {
 		/* Put so socket structure into the queue */
 		DEBUG_TRACE("Accepted socket %d", (int)so.sock);
@@ -19115,6 +20163,12 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 				    strerror(ERRNO));
 			}
 		}
+
+#if defined(SO_NOSIGPIPE)
+                int val = 1;
+                setsockopt(so.sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&val, sizeof(int));
+#endif
+
 #endif
 
 		/* Disable TCP Nagle's algorithm. Normally TCP packets are coalesced
@@ -19138,8 +20192,10 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 		/* The "non blocking" property should already be
 		 * inherited from the parent socket. Set it for
 		 * non-compliant socket implementations. */
-		set_non_blocking_mode(so.sock);
+		//set_non_blocking_mode(so.sock);
 
+                //NOTE: default blocking socket is prefered due to issues in error handling with non blocking
+                set_blocking_mode(so.sock);
 		so.in_use = 0;
 		produce_socket(ctx, &so);
 	}
@@ -19152,6 +20208,8 @@ master_thread_run(struct mg_context *ctx)
 	struct mg_workerTLS tls;
 	struct mg_pollfd *pfd;
 	unsigned int i;
+	unsigned int ctrlidx = 0;
+	unsigned int ctrlfd_cnt = 0;
 	unsigned int workerthreadcount;
 
 	if (!ctx) {
@@ -19233,11 +20291,19 @@ master_thread_run(struct mg_context *ctx)
 			pfd[i].events = POLLIN;
 		}
 
-		if (mg_poll(pfd,
-		            ctx->num_listening_sockets,
-		            SOCKET_TIMEOUT_QUANTUM,
-		            &(ctx->stop_flag))
-		    > 0) {
+		ctrlidx = 0; //reset
+		ctrlfd_cnt = 0;
+		if ((i > 0) && (ctx->listen_stop.sd > 0)) {
+		   pfd[i].fd = ctx->listen_stop.sd;
+		   pfd[i].events = POLLIN;
+		   ctrlidx = i;
+		   ctrlfd_cnt = 1;
+		}
+
+               /* increase 15000ms poll timeout for civetweb-master, than earlier frequent 200ms */
+                #define MASTER_POLL_TIMEOUT_MS 15000
+
+		if (poll(pfd, ctx->num_listening_sockets + ctrlfd_cnt, MASTER_POLL_TIMEOUT_MS) > 0) {
 			for (i = 0; i < ctx->num_listening_sockets; i++) {
 				/* NOTE(lsm): on QNX, poll() returns POLLRDNORM after the
 				 * successful poll, and POLLIN is defined as
@@ -19249,11 +20315,28 @@ master_thread_run(struct mg_context *ctx)
 					accept_new_connection(&ctx->listening_sockets[i], ctx);
 				}
 			}
+
+			if ((ctrlidx <= i) && ctrlfd_cnt && (pfd[ctrlidx].revents & POLLIN) &&
+                             (pfd[ctrlidx].fd == ctx->listen_stop.sd)) {
+			       // At this time not interested in what is recvd,
+			       // but rather a way to wake up from poll.
+                               // Just drain the datagram for now. Also we can check if the
+                               // received data value is same as received from socket in future
+                               int val = 0;
+                               int r = recvfrom(ctx->listen_stop.sd, (char *)&val, sizeof(int), 0, NULL, NULL);
+                               //if ( r < 0 ) {
+                                 // printf("%s() listen_stop r=%d ERRNO=%d\n",__func__,r,ERRNO);
+                               //}
+                              // printf("%s() time=%ld listen_stop.sd=%d, stop_now=%d, stop_flag=%d ctrlidx=%d i=%d rcvd=%d r=%d\n",
+                              //   __func__,time(NULL),ctx->listen_stop.sd,ctx->listen_stop.stop_now,ctx->stop_flag,ctrlidx,i,val,r);
+			}
 		}
 	}
 
 	/* Here stop_flag is 1 - Initiate shutdown. */
 	DEBUG_TRACE("%s", "stopping workers");
+
+        mg_close_stop_ctx(&ctx->listen_stop);
 
 	/* Stop signal received: somebody called mg_stop. Quit. */
 	close_all_listening_sockets(ctx);
@@ -19262,17 +20345,20 @@ master_thread_run(struct mg_context *ctx)
 #if defined(ALTERNATIVE_QUEUE)
 	for (i = 0; i < ctx->cfg_worker_threads; i++) {
 		event_signal(ctx->client_wait_events[i]);
+
+		/* Since we know all sockets, we can shutdown the connections. */ 
+		if (ctx->client_socks[i].in_use) {
+			shutdown(ctx->client_socks[i].sock, SHUTDOWN_BOTH);
+		}
 	}
-#else
-	(void)pthread_mutex_lock(&ctx->thread_mutex);
-	pthread_cond_broadcast(&ctx->sq_full);
-	(void)pthread_mutex_unlock(&ctx->thread_mutex);
 #endif
 
 	/* Join all worker threads to avoid leaking threads. */
 	workerthreadcount = ctx->cfg_worker_threads;
 	for (i = 0; i < workerthreadcount; i++) {
 		if (ctx->worker_threadids[i] != 0) {
+                        // wake up workers just before joining, in case if they are in event_wait
+		        event_signal(ctx->client_wait_events[i]);
 			mg_join_thread(ctx->worker_threadids[i]);
 		}
 	}
@@ -19360,6 +20446,8 @@ free_context(struct mg_context *ctx)
 		return;
 	}
 
+        mg_close_stop_ctx(&ctx->listen_stop);
+
 	/* Call user callback */
 	if (ctx->callbacks.exit_context) {
 		ctx->callbacks.exit_context(ctx);
@@ -19426,7 +20514,9 @@ free_context(struct mg_context *ctx)
 		        : (ctx->callbacks.external_ssl_ctx(&ssl_ctx, ctx->user_data));
 
 		if (callback_ret == 0) {
+                    if (ctx->dd.ssl_ctx != NULL) {
 			SSL_CTX_free(ctx->dd.ssl_ctx);
+                    }
 		}
 		/* else: ignore error and ommit SSL_CTX_free in case
 		 * callback_ret is 1 */
@@ -19434,10 +20524,14 @@ free_context(struct mg_context *ctx)
 #endif /* !NO_SSL */
 
 	/* Deallocate worker thread ID array */
-	mg_free(ctx->worker_threadids);
+	if (ctx->worker_threadids != NULL) {
+		mg_free(ctx->worker_threadids);
+	}
 
 	/* Deallocate worker thread ID array */
-	mg_free(ctx->worker_connections);
+	if (ctx->worker_connections != NULL) {
+		mg_free(ctx->worker_connections);
+	}
 
 	/* deallocate system name string */
 	mg_free(ctx->systemName);
@@ -19451,6 +20545,8 @@ void
 mg_stop(struct mg_context *ctx)
 {
 	pthread_t mt;
+        // int lsd = INVALID_SOCKET;
+
 	if (!ctx) {
 		return;
 	}
@@ -19464,8 +20560,17 @@ mg_stop(struct mg_context *ctx)
 
 	ctx->masterthreadid = 0;
 
+        // lsd = ctx->listening_sockets[0].sock; //get it before setting stop_flag
+
 	/* Set stop flag, so all threads know they have to exit. */
 	STOP_FLAG_ASSIGN(&ctx->stop_flag, 1);
+ // Enable this and above lsd values, if we also want to signal master_thread_run using connect_to_wakeup_master
+        // if (lsd != INVALID_SOCKET) {
+        //    connect_to_wakeup_master(lsd);
+        // }
+
+        // mg_signal_stop_ctx() is now enough to wakeup master_thread_run waiting in listen i/o
+        mg_signal_stop_ctx(&ctx->listen_stop);
 
 	/* Join timer thread */
 #if defined(USE_TIMERS)
@@ -19571,7 +20676,8 @@ mg_start2(struct mg_init_data *init, struct mg_error_data *error)
 {
 	struct mg_context *ctx;
 	const char *name, *value, *default_value;
-	int idx, ok, workerthreadcount;
+        int ok = 1;
+	int idx, workerthreadcount;
 	unsigned int i;
 	int itmp;
 	void (*exit_callback)(const struct mg_context *ctx) = 0;
@@ -20035,7 +21141,15 @@ mg_start2(struct mg_init_data *init, struct mg_error_data *error)
 		return NULL;
 	}
 
+        mg_conn_stop_ctx_init(&ctx->listen_stop, 1);
+
 	ctx->cfg_worker_threads = ((unsigned int)(workerthreadcount));
+
+	if (ctx->cfg_worker_threads > MAX_PERSISTENT_WORKER_THREADS) {
+		/* Limit persistent worker threads to MAX_PERSISTENT_WORKER_THREADS 2 */
+		ctx->cfg_worker_threads = MAX_PERSISTENT_WORKER_THREADS ;
+	}
+
 	ctx->worker_threadids = (pthread_t *)mg_calloc_ctx(ctx->cfg_worker_threads,
 	                                                   sizeof(pthread_t),
 	                                                   ctx);
