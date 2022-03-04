@@ -1107,6 +1107,19 @@ static pthread_mutexattr_t pthread_mutex_attr;
 
 static pthread_mutex_t global_lock_mutex;
 
+static struct civetweb_allocator g_allocator;
+
+void mg_set_dmem_allocator(struct civetweb_allocator *dmem)
+{
+    if (dmem) {
+       memcpy(&g_allocator,dmem,sizeof(struct civetweb_allocator));
+    }
+}
+void mg_reset_dmem_allocator(void)
+{
+   memset(&g_allocator,0,sizeof(struct civetweb_allocator));
+}
+
 
 FUNCTION_MAY_BE_UNUSED
 static void
@@ -1314,7 +1327,8 @@ mg_malloc_ex(size_t size,
              const char *file,
              unsigned line)
 {
-	void *data = malloc(size + 2 * sizeof(uintptr_t));
+	void* (*__malloc)(size_t size) = g_allocator.__malloc ? g_allocator.__malloc : malloc;
+	void *data = __malloc(size + 2 * sizeof(uintptr_t));
 	void *memory = 0;
 	struct mg_memory_stat *mstat = get_memory_stat(ctx);
 
@@ -1370,6 +1384,7 @@ mg_calloc_ex(size_t count,
 static void
 mg_free_ex(void *memory, const char *file, unsigned line)
 {
+   void (*__free)(void *ptr) = g_allocator.__free ? g_allocator.__free : free ;
 #if defined(MEMORY_DEBUGGING)
 	char mallocStr[256];
 #else
@@ -1396,7 +1411,7 @@ mg_free_ex(void *memory, const char *file, unsigned line)
 		        line);
 		DEBUG_TRACE("%s", mallocStr);
 #endif
-		free(data);
+		__free(data);
 	}
 }
 
@@ -1411,6 +1426,7 @@ mg_realloc_ex(void *memory,
 	void *data;
 	void *_realloc;
 	uintptr_t oldsize;
+        void* (*__realloc)(void *ptr, size_t size) = g_allocator.__realloc ? g_allocator.__realloc : realloc;;
 
 #if defined(MEMORY_DEBUGGING)
 	char mallocStr[256];
@@ -1426,7 +1442,7 @@ mg_realloc_ex(void *memory,
 			data = (void *)(((char *)memory) - 2 * sizeof(uintptr_t));
 			oldsize = ((uintptr_t *)data)[0];
 			mstat = (struct mg_memory_stat *)((uintptr_t *)data)[1];
-			_realloc = realloc(data, newsize + 2 * sizeof(uintptr_t));
+			_realloc = __realloc(data, newsize + 2 * sizeof(uintptr_t));
 			if (_realloc) {
 				data = _realloc;
 				mg_atomic_add(&mstat->totalMemUsed, -(ptrdiff_t)oldsize);
@@ -1492,26 +1508,31 @@ mg_realloc_ex(void *memory,
 static __inline void *
 mg_malloc(size_t a)
 {
-	return malloc(a);
+  void* (*__malloc)(size_t size) = g_allocator.__malloc ? g_allocator.__malloc : malloc;
+	return __malloc(a);
 }
 
 static __inline void *
 mg_calloc(size_t a, size_t b)
 {
-	return calloc(a, b);
+   void* (*__calloc)(size_t nmemb, size_t size) = g_allocator.__calloc ? g_allocator.__calloc : calloc;
+
+	return __calloc(a, b);
 }
 
 static __inline void *
 mg_realloc(void *a, size_t b)
 {
-	return realloc(a, b);
+   void* (*__realloc)(void *ptr, size_t size) = g_allocator.__realloc ? g_allocator.__realloc : realloc;
+	return __realloc(a, b);
 }
 
 static __inline void
 mg_free(void *a)
 {
+   void (*__free)(void *ptr) = g_allocator.__free ? g_allocator.__free : free ;
     if (a) {
-	free(a);
+	__free(a);
     }
 }
 
@@ -20538,6 +20559,9 @@ free_context(struct mg_context *ctx)
 
 	/* Deallocate context itself */
 	mg_free(ctx);
+
+	/* Call mg_exit_library here */
+        mg_exit_library();
 }
 
 

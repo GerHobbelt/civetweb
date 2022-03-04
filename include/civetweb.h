@@ -109,6 +109,15 @@ enum {
 	MG_FEATURES_ALL = 0xFFFFu
 };
 
+typedef struct civetweb_allocator {
+   void* (*__malloc)(size_t size);
+   void (*__free)(void *ptr);
+   void* (*__calloc)(size_t nmemb, size_t size);
+   void* (*__realloc)(void *ptr, size_t size);
+}civetweb_allocator;
+
+void mg_set_dmem_allocator(struct civetweb_allocator *dmem);
+void mg_reset_dmem_allocator(void);
 
 /* Initialize this library. This should be called once before any other
  * function from this library. This function is not guaranteed to be
