@@ -9278,7 +9278,7 @@ is_valid_port(unsigned long port)
 
 
 static int
-mg_inet_pton(int af, const char *src, void *dst, size_t dstlen, int resolve_src)
+mg_inet_pton(int af, const char *src, void *dst, size_t dstlen, int resolve_src, char *errbuf, int buflen)
 {
 	struct addrinfo hints, *res, *ressave;
 	int func_ret = 0;
@@ -9292,13 +9292,10 @@ mg_inet_pton(int af, const char *src, void *dst, size_t dstlen, int resolve_src)
 
 	gai_ret = getaddrinfo(src, NULL, &hints, &res);
 	if (gai_ret != 0) {
-		/* gai_strerror could be used to convert gai_ret to a string */
-		/* POSIX return values: see
-		 * http://pubs.opengroup.org/onlinepubs/9699919799/functions/freeaddrinfo.html
-		 */
-		/* Windows return values: see
-		 * https://msdn.microsoft.com/en-us/library/windows/desktop/ms738520%28v=vs.85%29.aspx
-		 */
+                if (errbuf && (buflen > 0)) {
+                   memset(errbuf,0,buflen);
+                   mg_snprintf(NULL, NULL, errbuf, buflen, " %s", gai_strerror(gai_ret));
+                }
 		return 0;
 	}
 
@@ -9551,11 +9548,11 @@ connect_socket(struct mg_context *ctx /* may be NULL */,
 		memcpy(sa->sun.sun_path, host, hostlen);
 	} else
 #endif
-	    if (mg_inet_pton(AF_INET, host, &sa->sin, sizeof(sa->sin), 1)) {
+	    if (mg_inet_pton(AF_INET, host, &sa->sin, sizeof(sa->sin), 1, conn_err, MAX_CONN_ERR_SZ)) {
 		sa->sin.sin_port = htons((uint16_t)port);
 		ip_ver = 4;
 #if defined(USE_IPV6)
-	} else if (mg_inet_pton(AF_INET6, host, &sa->sin6, sizeof(sa->sin6), 1)) {
+	} else if (mg_inet_pton(AF_INET6, host, &sa->sin6, sizeof(sa->sin6), 1,conn_err, MAX_CONN_ERR_SZ)) {
 		sa->sin6.sin6_port = htons((uint16_t)port);
 		ip_ver = 6;
 	} else if (host[0] == '[') {
@@ -9565,7 +9562,7 @@ connect_socket(struct mg_context *ctx /* may be NULL */,
 		char *h = (l > 1) ? mg_strdup_ctx(host + 1, ctx) : NULL;
 		if (h) {
 			h[l - 1] = 0;
-			if (mg_inet_pton(AF_INET6, h, &sa->sin6, sizeof(sa->sin6), 0)) {
+			if (mg_inet_pton(AF_INET6, h, &sa->sin6, sizeof(sa->sin6), 0,conn_err, MAX_CONN_ERR_SZ)) {
 				sa->sin6.sin6_port = htons((uint16_t)port);
 				ip_ver = 6;
 			}
@@ -9579,8 +9576,8 @@ connect_socket(struct mg_context *ctx /* may be NULL */,
 		            NULL, /* No truncation check for ebuf */
 		            ebuf,
 		            ebuf_len,
-		            "%s",
-		            "host not found");
+		            "%s. %s",
+		            "host not found",conn_err);
 		return 0;
 	}
 
@@ -9654,12 +9651,25 @@ connect_socket(struct mg_context *ctx /* may be NULL */,
         }
 
 	if (conn_ret != 0) {
+		struct sockaddr_in srcaddr;
+                char srcIp[30] = {0};
+		#if defined(_WIN32) || defined(_WIN64)
+		int len = sizeof(srcaddr);
+		#else
+		socklen_t len = sizeof(srcaddr);
+		#endif
+		memset(&srcaddr, 0, sizeof(srcaddr));
+		rc = getsockname(*sock, (struct sockaddr *)&srcaddr, &len);
+		if ((rc == 0) && (srcaddr.sin_addr.s_addr > 0)) {
+		  mg_snprintf(NULL, NULL, srcIp, sizeof(srcIp)-1, " src(%s), ", inet_ntoa(srcaddr.sin_addr));
+                }
 		/* Not connected */
 		mg_snprintf(NULL,
 		            NULL, /* No truncation check for ebuf */
 		            ebuf,
 		            ebuf_len,
-		            "connect(%s:%d): error %s",
+		            "%s connect(%s:%d): error %s",
+                            srcIp,
 		            host,
 		            port,
 		            conn_err);
@@ -13923,7 +13933,7 @@ parse_match_net(const struct vec *vec, const union usa *sa, int no_strict)
 				if (sa->sa.sa_family != AF_INET6) {
 					return 0;
 				}
-				if (mg_inet_pton(AF_INET6, ad, &sin6, sizeof(sin6), 0)) {
+				if (mg_inet_pton(AF_INET6, ad, &sin6, sizeof(sin6), 0,NULL,0)) {
 					/* IPv6 format */
 					for (i = 0; i < 16; i++) {
 						uint8_t ip = sa->sin6.sin6_addr.s6_addr[i];
@@ -15330,7 +15340,7 @@ parse_port_string(const struct vec *vec, struct socket *so, int *ip_version)
 	} else if (sscanf(vec->ptr, "[%49[^]]]:%u%n", buf, &port, &len) == 2
 	           && ((size_t)len <= vec->len)
 	           && mg_inet_pton(
-	                  AF_INET6, buf, &so->lsa.sin6, sizeof(so->lsa.sin6), 0)) {
+	                  AF_INET6, buf, &so->lsa.sin6, sizeof(so->lsa.sin6), 0, NULL, 0)) {
 		/* IPv6 address, examples: see above */
 		/* so->lsa.sin6.sin6_family = AF_INET6; already set by mg_inet_pton
 		 */
@@ -15390,7 +15400,7 @@ parse_port_string(const struct vec *vec, struct socket *so, int *ip_version)
 		mg_strlcpy(hostname, vec->ptr, hostnlen + 1);
 
 		if (mg_inet_pton(
-		        AF_INET, hostname, &so->lsa.sin, sizeof(so->lsa.sin), 1)) {
+		        AF_INET, hostname, &so->lsa.sin, sizeof(so->lsa.sin), 1, NULL, 0)) {
 			if (sscanf(cb + 1, "%u%n", &port, &len)
 			    == 1) { // NOLINT(cert-err34-c) 'sscanf' used to convert a
 				        // string to an integer value, but function will not
@@ -15407,7 +15417,7 @@ parse_port_string(const struct vec *vec, struct socket *so, int *ip_version)
 		                        hostname,
 		                        &so->lsa.sin6,
 		                        sizeof(so->lsa.sin6),
-		                        1)) {
+		                        1, NULL, 0)) {
 			if (sscanf(cb + 1, "%u%n", &port, &len) == 1) {
 				*ip_version = 6;
 				so->lsa.sin6.sin6_port = htons((uint16_t)port);
