@@ -1309,7 +1309,7 @@ mg_atomic_add64(volatile int64_t *addr, int64_t value)
 #endif
 
 
-#if defined(USE_SERVER_STATS)
+#if defined(USE_SERVER_STATS) && defined(USE_MEMORY_STATS)
 
 struct mg_memory_stat {
 	volatile ptrdiff_t totalMemUsed;
@@ -1502,7 +1502,7 @@ mg_realloc_ex(void *memory,
 #define mg_realloc_ctx(a, b, c) mg_realloc_ex(a, b, c, __FILE__, __LINE__)
 
 
-#else /* USE_SERVER_STATS */
+#else /* USE_SERVER_STATS && USE_MEMORY_STATS */
 
 
 static __inline void *
@@ -1541,7 +1541,7 @@ mg_free(void *a)
 #define mg_realloc_ctx(a, b, c) mg_realloc(a, b)
 #define mg_free_ctx(a, c) mg_free(a)
 
-#endif /* USE_SERVER_STATS */
+#endif /* USE_SERVER_STATS  && USE_MEMORY_STATS */
 
 
 static void mg_vsnprintf(const struct mg_connection *conn,
@@ -2407,7 +2407,7 @@ struct mg_context {
 	/* Memory related */
 	unsigned int max_request_size; /* The max request size */
 
-#if defined(USE_SERVER_STATS)
+#if defined(USE_SERVER_STATS) && defined(USE_MEMORY_STATS)
 	struct mg_memory_stat ctx_memory;
 #endif
 
@@ -2447,7 +2447,7 @@ struct mg_context {
 };
 
 
-#if defined(USE_SERVER_STATS)
+#if defined(USE_SERVER_STATS) && defined(USE_MEMORY_STATS)
 static struct mg_memory_stat mg_common_memory = {0, 0, 0};
 
 static struct mg_memory_stat *
@@ -22024,7 +22024,10 @@ mg_get_context_info(const struct mg_context *ctx, char *buffer, int buflen)
 #else
 	static const char eol[] = "\n", eoobj[] = "\n}\n";
 #endif
+
+#if defined(USE_MEMORY_STATS)
 	struct mg_memory_stat *ms = get_memory_stat((struct mg_context *)ctx);
+#endif
 
 	if ((buffer == NULL) || (buflen < 1)) {
 		buflen = 0;
@@ -22041,6 +22044,7 @@ mg_get_context_info(const struct mg_context *ctx, char *buffer, int buflen)
 
 	context_info_length += mg_str_append(&buffer, end, "{");
 
+#if defined(USE_MEMORY_STATS)
 	if (ms) { /* <-- should be always true */
 		      /* Memory information */
 		int blockCount = (int)ms->blockCount;
@@ -22069,6 +22073,7 @@ mg_get_context_info(const struct mg_context *ctx, char *buffer, int buflen)
 		            eol);
 		context_info_length += mg_str_append(&buffer, end, block);
 	}
+#endif
 
 	if (ctx) {
 		/* Declare all variables at begin of the block, to comply
@@ -22093,7 +22098,10 @@ mg_get_context_info(const struct mg_context *ctx, char *buffer, int buflen)
 		            NULL,
 		            block,
 		            sizeof(block),
-		            ",%s\"connections\" : {%s"
+#if defined(USE_MEMORY_STATS)
+                            ","
+#endif
+		            "%s\"connections\" : {%s"
 		            "\"active\" : %i,%s"
 		            "\"maxActive\" : %i,%s"
 		            "\"total\" : %i%s"
