@@ -2391,6 +2391,7 @@ struct mg_context {
 	stop_flag_t stop_flag;        /* Should we stop event loop */
 	pthread_mutex_t thread_mutex; /* Protects client_socks or queue */
         volatile ptrdiff_t cur_tmp_workers; /* current temporary worker threads */
+        volatile unsigned int t_pending_count;
 
 	pthread_t masterthreadid; /* The master thread ID */
 	unsigned int
@@ -19542,7 +19543,7 @@ static unsigned __stdcall tmp_worker_thread(void *thread_func_param) ;
 static void * tmp_worker_thread(void *thread_func_param) ;
 #endif /* _WIN32 */
 
-static void
+static int
 spin_tmp_worker(struct mg_context *ctx, const struct socket *sp)
 {
 	if (ctx && sp && (ctx->cur_tmp_workers < MAX_WORKER_THREADS)) {
@@ -19553,7 +19554,7 @@ spin_tmp_worker(struct mg_context *ctx, const struct socket *sp)
 		if (!twta) {
 		    printf("calloc failed for twta error %ld",(long)ERRNO);
 		    closesocket(sp->sock);
-		    return ;
+		    return -1;
 		}
 
 		//populate thread args param with ctx and sock.
@@ -19565,9 +19566,12 @@ spin_tmp_worker(struct mg_context *ctx, const struct socket *sp)
 		   closesocket(sp->sock);
 		   mg_free(twta);
 		   printf("Cannot create threads: error %ld",(long)ERRNO);
-		}
+		   return -1;
+		} else {
+		   return 0;
+                }
 	}
-	return ;
+	return -1 ;
 }
 
 #if defined(ALTERNATIVE_QUEUE)
@@ -19598,7 +19602,20 @@ produce_socket(struct mg_context *ctx, const struct socket *sp)
 
 		/* Now try temporary worker threads */
 		if (ctx->cur_tmp_workers < MAX_WORKER_THREADS) {
-			spin_tmp_worker(ctx, sp);
+                        int rc = 0;
+                        (void)pthread_mutex_lock(&ctx->thread_mutex);
+                         ctx->t_pending_count++;
+                        (void)pthread_mutex_unlock(&ctx->thread_mutex);
+
+			rc = spin_tmp_worker(ctx, sp);
+
+                        if (rc < 0) {
+                          (void)pthread_mutex_lock(&ctx->thread_mutex);
+                          if (ctx->t_pending_count > 0) {
+                             ctx->t_pending_count--;
+                          }
+                          (void)pthread_mutex_unlock(&ctx->thread_mutex);
+                        }
 			return ;
 		}
 		/* queue is full */
@@ -20103,6 +20120,14 @@ static unsigned __stdcall tmp_worker_thread(void *thread_func_param)
 {
     tmp_worker_thread_run((struct tmp_worker_thread_args *)thread_func_param);
     if (thread_func_param) {
+	struct mg_context *ctx = ((struct tmp_worker_thread_args *)thread_func_param)->ctx;
+	if (ctx) {
+	  (void)pthread_mutex_lock(&ctx->thread_mutex);
+	  if (ctx->t_pending_count > 0) {
+	    ctx->t_pending_count--;
+	  }
+	  (void)pthread_mutex_unlock(&ctx->thread_mutex);
+        }
 	mg_free(thread_func_param);
     }
     return 0;
@@ -20128,6 +20153,14 @@ tmp_worker_thread(void *thread_func_param)
 {
     tmp_worker_thread_run((struct tmp_worker_thread_args *)thread_func_param);
     if (thread_func_param) {
+	struct mg_context *ctx = ((struct tmp_worker_thread_args *)thread_func_param)->ctx;
+	if (ctx) {
+	  (void)pthread_mutex_lock(&ctx->thread_mutex);
+	  if (ctx->t_pending_count > 0) {
+	    ctx->t_pending_count--;
+	  }
+	  (void)pthread_mutex_unlock(&ctx->thread_mutex);
+        }
 	mg_free(thread_func_param);
     }
     return NULL;
@@ -20242,6 +20275,7 @@ master_thread_run(struct mg_context *ctx)
 	unsigned int ctrlidx = 0;
 	unsigned int ctrlfd_cnt = 0;
 	unsigned int workerthreadcount;
+        volatile unsigned int t_pending_count = 0;
 
 	if (!ctx) {
 		return;
@@ -20335,6 +20369,12 @@ master_thread_run(struct mg_context *ctx)
                 #define MASTER_POLL_TIMEOUT_MS 15000
 
 		if (poll(pfd, ctx->num_listening_sockets + ctrlfd_cnt, MASTER_POLL_TIMEOUT_MS) > 0) {
+
+                        if (!STOP_FLAG_IS_ZERO(&ctx->stop_flag)) {
+                           // printf("%s() stop_flag is set to stop \n",__func__);
+                           break;
+                        }
+
 			for (i = 0; i < ctx->num_listening_sockets; i++) {
 				/* NOTE(lsm): on QNX, poll() returns POLLRDNORM after the
 				 * successful poll, and POLLIN is defined as
@@ -20393,6 +20433,18 @@ master_thread_run(struct mg_context *ctx)
 			mg_join_thread(ctx->worker_threadids[i]);
 		}
 	}
+
+        // wait for pending threads using this ctx to finish
+        do {
+             (void)pthread_mutex_lock(&ctx->thread_mutex);
+             t_pending_count = ctx->t_pending_count;
+             (void)pthread_mutex_unlock(&ctx->thread_mutex);
+             if (t_pending_count == 0) {
+                break;
+             }
+             // printf("%s() waiting for pending(%u) client using ctx(%p) to finish ...\n",__func__,t_pending_count,ctx);
+             mg_sleep(50); //re-try after 50 msec
+        } while(t_pending_count > 0);
 
 #if defined(USE_LUA)
 	/* Free Lua state of lua background task */
@@ -20597,7 +20649,9 @@ mg_stop(struct mg_context *ctx)
         // lsd = ctx->listening_sockets[0].sock; //get it before setting stop_flag
 
 	/* Set stop flag, so all threads know they have to exit. */
+        (void)pthread_mutex_lock(&ctx->thread_mutex);
 	STOP_FLAG_ASSIGN(&ctx->stop_flag, 1);
+        (void)pthread_mutex_unlock(&ctx->thread_mutex);
  // Enable this and above lsd values, if we also want to signal master_thread_run using connect_to_wakeup_master
         // if (lsd != INVALID_SOCKET) {
         //    connect_to_wakeup_master(lsd);
