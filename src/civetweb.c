@@ -18132,7 +18132,7 @@ conn->dom_ctx->config[WEBSOCKET_TIMEOUT] = "10000";
 	}
 
 	conn->client.is_ssl = use_ssl ? 1 : 0;
-	if (0 != pthread_mutex_init(&conn->mutex, &pthread_mutex_attr)) {
+	if (0 != pthread_mutex_init(&conn->mutex, (mg_init_library_called>0)?(&pthread_mutex_attr):NULL)) {
 		mg_snprintf(NULL,
 		            NULL, /* No truncation check for ebuf */
 		            ebuf,
