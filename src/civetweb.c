@@ -20622,8 +20622,6 @@ free_context(struct mg_context *ctx)
 	/* Deallocate context itself */
 	mg_free(ctx);
 
-	/* Call mg_exit_library here */
-        mg_exit_library();
 }
 
 
