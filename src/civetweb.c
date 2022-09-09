@@ -195,7 +195,7 @@ mg_static_assert(sizeof(void *) >= sizeof(int), "data type size check");
 #include <sys/socket.h>
 #include <time.h>
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 
 /* Max worker threads is the max of pthreads minus the main application thread
  * and minus the main civetweb thread, thus -2
@@ -1556,10 +1556,15 @@ static int mg_openssl_initialized = 0;
 #endif
 #if !defined(OPENSSL_API_1_0) && !defined(OPENSSL_API_1_1)                     \
     && !defined(OPENSSL_API_3_0) && !defined(USE_MBEDTLS)
-#error "Please define OPENSSL_API_1_0 or OPENSSL_API_1_1"
+#error "Please define OPENSSL_API_#_# or USE_MBEDTLS"
 #endif
-#if defined(OPENSSL_API_1_0) && defined(OPENSSL_API_1_1)                       \
-    && defined(OPENSSL_API_3_0)
+#if defined(OPENSSL_API_1_0) && defined(OPENSSL_API_1_1)
+#error "Multiple OPENSSL_API versions defined"
+#endif
+#if defined(OPENSSL_API_1_1) && defined(OPENSSL_API_3_0)
+#error "Multiple OPENSSL_API versions defined"
+#endif
+#if defined(OPENSSL_API_1_0) && defined(OPENSSL_API_3_0)
 #error "Multiple OPENSSL_API versions defined"
 #endif
 #if (defined(OPENSSL_API_1_0) || defined(OPENSSL_API_1_1)                      \
@@ -3825,7 +3830,6 @@ get_header(const struct mg_header *hdr, int num_hdr, const char *name)
 }
 
 
-#if defined(USE_WEBSOCKET)
 /* Retrieve requested HTTP header multiple values, and return the number of
  * found occurrences */
 static int
@@ -3845,7 +3849,6 @@ get_req_headers(const struct mg_request_info *ri,
 	}
 	return cnt;
 }
-#endif
 
 
 CIVETWEB_API const char *
@@ -8519,7 +8522,8 @@ parse_auth_header(struct mg_connection *conn,
 		const char *userpw_b64 = auth_header + 6;
 		size_t userpw_b64_len = strlen(userpw_b64);
 		size_t buf_len_r = buf_size;
-		if (mg_base64_decode(userpw_b64, userpw_b64_len, buf, &buf_len_r)
+		if (mg_base64_decode(
+		        userpw_b64, userpw_b64_len, (unsigned char *)buf, &buf_len_r)
 		    != -1) {
 			return 0; /* decode error */
 		}
@@ -11529,7 +11533,7 @@ handle_cgi_request(struct mg_connection *conn,
 	size_t buflen;
 	int headers_len, data_len, i, truncated;
 	int fdin[2] = {-1, -1}, fdout[2] = {-1, -1}, fderr[2] = {-1, -1};
-	const char *status, *status_text, *connection_state;
+	const char *status, *status_text;
 	char *pbuf, dir[UTF8_PATH_MAX], *p;
 	struct mg_request_info ri;
 	struct cgi_environment blk;
@@ -11777,9 +11781,8 @@ handle_cgi_request(struct mg_connection *conn,
 	} else {
 		conn->status_code = 200;
 	}
-	connection_state =
-	    get_header(ri.http_headers, ri.num_headers, "Connection");
-	if (!header_has_option(connection_state, "keep-alive")) {
+
+	if (!should_keep_alive(conn)) {
 		conn->must_close = 1;
 	}
 
@@ -12981,8 +12984,10 @@ mg_unlock_context(struct mg_context *ctx)
 #if defined(USE_WEBSOCKET)
 
 #if !defined(NO_SSL_DL)
+#if !defined(OPENSSL_API_3_0)
 #define SHA_API static
 #include "sha1.inl"
+#endif
 #endif
 
 static int
@@ -12991,7 +12996,9 @@ send_websocket_handshake(struct mg_connection *conn, const char *websock_key)
 	static const char *magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 	char buf[100], sha[20], b64_sha[sizeof(sha) * 2];
 	size_t dst_len = sizeof(b64_sha);
+#if !defined(OPENSSL_API_3_0)
 	SHA_CTX sha_ctx;
+#endif
 	int truncated;
 
 	/* Calculate Sec-WebSocket-Accept reply from Sec-WebSocket-Key. */
@@ -13003,9 +13010,18 @@ send_websocket_handshake(struct mg_connection *conn, const char *websock_key)
 
 	DEBUG_TRACE("%s", "Send websocket handshake");
 
+#if defined(OPENSSL_API_3_0)
+	EVP_Digest((unsigned char *)buf,
+	           (uint32_t)strlen(buf),
+	           (unsigned char *)sha,
+	           NULL,
+	           EVP_get_digestbyname("sha1"),
+	           NULL);
+#else
 	SHA1_Init(&sha_ctx);
 	SHA1_Update(&sha_ctx, (unsigned char *)buf, (uint32_t)strlen(buf));
 	SHA1_Final((unsigned char *)sha, &sha_ctx);
+#endif
 	mg_base64_encode((unsigned char *)sha, sizeof(sha), b64_sha, &dst_len);
 	mg_printf(conn,
 	          "HTTP/1.1 101 Switching Protocols\r\n"
@@ -13836,30 +13852,40 @@ handle_websocket_request(struct mg_connection *conn,
 static int
 should_switch_to_protocol(const struct mg_connection *conn)
 {
-	const char *upgrade, *connection;
+	const char *connection_headers[8];
+	const char *upgrade_to;
+	int connection_header_count, i, should_upgrade;
 
 	/* A websocket protocoll has the following HTTP headers:
 	 *
 	 * Connection: Upgrade
 	 * Upgrade: Websocket
+	 *
+	 * It seems some clients use multiple headers:
+	 * see https://github.com/civetweb/civetweb/issues/1083
 	 */
-
-	connection = mg_get_header(conn, "Connection");
-	if (connection == NULL) {
+	connection_header_count = get_req_headers(&conn->request_info,
+	                                          "Connection",
+	                                          connection_headers,
+	                                          8);
+	should_upgrade = 0;
+	for (i = 0; i < connection_header_count; i++) {
+		if (0 != mg_strcasestr(connection_headers[i], "upgrade")) {
+			should_upgrade = 1;
+		}
+	}
+	if (!should_upgrade) {
 		return PROTOCOL_TYPE_HTTP1;
 	}
-	if (!mg_strcasestr(connection, "upgrade")) {
-		return PROTOCOL_TYPE_HTTP1;
-	}
 
-	upgrade = mg_get_header(conn, "Upgrade");
-	if (upgrade == NULL) {
+	upgrade_to = mg_get_header(conn, "Upgrade");
+	if (upgrade_to == NULL) {
 		/* "Connection: Upgrade" without "Upgrade" Header --> Error */
 		return -1;
 	}
 
 	/* Upgrade to ... */
-	if (0 != mg_strcasestr(upgrade, "websocket")) {
+	if (0 != mg_strcasestr(upgrade_to, "websocket")) {
 		/* The headers "Host", "Sec-WebSocket-Key", "Sec-WebSocket-Protocol" and
 		 * "Sec-WebSocket-Version" are also required.
 		 * Don't check them here, since even an unsupported websocket protocol
@@ -13868,7 +13894,7 @@ should_switch_to_protocol(const struct mg_connection *conn)
 		 */
 		return PROTOCOL_TYPE_WEBSOCKET; /* Websocket */
 	}
-	if (0 != mg_strcasestr(upgrade, "h2")) {
+	if (0 != mg_strcasestr(upgrade_to, "h2")) {
 		return PROTOCOL_TYPE_HTTP2; /* Websocket */
 	}
 
@@ -19255,6 +19281,7 @@ init_connection(struct mg_connection *conn)
 	conn->data_len = 0;
 	conn->handled_requests = 0;
 	conn->connection_type = CONNECTION_TYPE_INVALID;
+	conn->request_info.acceptedWebSocketSubprotocol = NULL;
 	mg_set_user_connection_data(conn, NULL);
 
 #if defined(USE_SERVER_STATS)
@@ -22223,12 +22250,12 @@ mg_get_handler_info(struct mg_context *ctx,
     mg_lock_context(ctx);
 
     for (tmp_rh = ctx->dd.handlers; tmp_rh != NULL; tmp_rh = tmp_rh->next) {
-                
+
         if (buflen > handler_info_len+ tmp_rh->uri_len) {
         memcpy(buffer+handler_info_len, tmp_rh->uri, tmp_rh->uri_len);
         }
         handler_info_len += tmp_rh->uri_len;
-        
+
         switch (tmp_rh->handler_type) {
             case REQUEST_HANDLER:
                 (void)tmp_rh->handler;
@@ -22237,12 +22264,12 @@ mg_get_handler_info(struct mg_context *ctx,
         (void)tmp_rh->connect_handler;
        (void) tmp_rh->ready_handler;
        (void) tmp_rh->data_handler;
-       (void) tmp_rh->close_handler; 
+       (void) tmp_rh->close_handler;
             break;
             case AUTH_HANDLER:
-             (void) tmp_rh->auth_handler; 
+             (void) tmp_rh->auth_handler;
             break;
-        }      
+        }
         (void)cbdata;
     }
 

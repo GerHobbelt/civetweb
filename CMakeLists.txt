@@ -2,6 +2,7 @@
 cmake_minimum_required (VERSION 3.3.0)
 cmake_policy(VERSION 3.2.2)
 cmake_policy(SET CMP0054 NEW)
+cmake_policy(SET CMP0057 NEW)
 
 # Set up the project
 project (civetweb)
@@ -225,6 +226,10 @@ message(STATUS "Compile for OpenSSL 1.0 API - ${CIVETWEB_SSL_OPENSSL_API_1_0}")
 # OpenSSL 1.1 API
 option(CIVETWEB_SSL_OPENSSL_API_1_1 "Use the OpenSSL 1.1 API" ON)
 message(STATUS "Compile for OpenSSL 1.1 API - ${CIVETWEB_SSL_OPENSSL_API_1_1}")
+
+# OpenSSL 1.1 API
+option(CIVETWEB_SSL_OPENSSL_API_3_0 "Use the OpenSSL 3.0 API" OFF)
+message(STATUS "Compile for OpenSSL 3.0 API - ${CIVETWEB_SSL_OPENSSL_API_3_0}")
 
 # Dynamically load or link the SSL libraries
 cmake_dependent_option(
@@ -535,9 +540,19 @@ endif()
 if(CIVETWEB_SSL_OPENSSL_API_1_1)
   add_definitions(-DOPENSSL_API_1_1)
 endif()
+if(CIVETWEB_SSL_OPENSSL_API_3_0)
+  add_definitions(-DOPENSSL_API_3_0)
+endif()
 if(CIVETWEB_SSL_OPENSSL_API_1_0 AND CIVETWEB_SSL_OPENSSL_API_1_1)
   message(FATAL_ERROR "Multiple SSL API versions defined")
 endif()
+if(CIVETWEB_SSL_OPENSSL_API_1_0 AND CIVETWEB_SSL_OPENSSL_API_3_0)
+  message(FATAL_ERROR "Multiple SSL API versions defined")
+endif()
+if(CIVETWEB_SSL_OPENSSL_API_1_1 AND CIVETWEB_SSL_OPENSSL_API_3_0)
+  message(FATAL_ERROR "Multiple SSL API versions defined")
+endif()
+
 
 add_definitions(-DUSE_STACK_SIZE=${CIVETWEB_THREAD_STACK_SIZE})
 
