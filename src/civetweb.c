@@ -6917,7 +6917,7 @@ time_t mg_get_rx_time(struct mg_connection *conn)
 	return conn && (conn->rx_time > 0) ? conn->rx_time : 0 ;
 }
 
-long int mg_get_conn_elasped_ms(struct mg_connection *conn)
+long int mg_get_conn_elapsed_ms(struct mg_connection *conn)
 {
   long int elapsedms = 0;
   // printf("%s() Entry \n",__func__);
