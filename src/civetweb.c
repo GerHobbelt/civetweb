@@ -482,6 +482,10 @@ _civet_safe_clock_gettime(int clk_id, struct timespec *t)
 #define MAX_PERSISTENT_WORKER_THREADS 2
 #endif
 
+// NOTE: DFT_TMP_WORKERS should be less than MAX_WORKER_THREADS
+#define DFT_TMP_WORKERS 150
+#define DFT_TMP_WORKERS_STR "150"
+
 /* Timeout interval for select/poll calls.
  * The timeouts depend on "*_timeout_ms" configuration values, but long
  * timeouts are split into timouts as small as SOCKET_TIMEOUT_QUANTUM.
@@ -1104,6 +1108,34 @@ static pthread_mutexattr_t pthread_mutex_attr;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
 #endif
+
+pthread_mutex_t th_wait_mut = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t  th_wait_cond = PTHREAD_COND_INITIALIZER;
+static void wait_for_tmp_workers();
+static void signal_tmp_worker_availability();
+
+static void wait_for_tmp_workers() {
+  struct timeval now;
+  struct timespec timeout;
+  gettimeofday(&now,NULL);
+  #define TIMED_WAIT_MSEC_TO_NSEC (50 * 1000 * 1000)
+  #define TIMED_WAIT_SEC 1
+
+  timeout.tv_sec = now.tv_sec + TIMED_WAIT_SEC;
+  timeout.tv_nsec = now.tv_usec * 1000;
+  // timeout.tv_nsec += TIMED_WAIT_MSEC_TO_NSEC;
+  pthread_mutex_lock(&th_wait_mut);
+  pthread_cond_timedwait(&th_wait_cond, &th_wait_mut, &timeout);
+  // pthread_cond_wait(&cond, &th_wait_mut);
+  pthread_mutex_unlock(&th_wait_mut);
+}
+
+static void signal_tmp_worker_availability() {
+
+  pthread_mutex_lock(&th_wait_mut);
+   pthread_cond_broadcast(&th_wait_cond);
+  pthread_mutex_unlock(&th_wait_mut);
+}
 
 static pthread_mutex_t global_lock_mutex;
 
@@ -1957,6 +1989,7 @@ enum {
 	/* Once for each server */
 	LISTENING_PORTS,
 	NUM_THREADS,
+	TMP_WORKER_THREADS,
 	RUN_AS_USER,
 	CONFIG_TCP_NODELAY, /* Prepended CONFIG_ to avoid conflict with the
 	                     * socket option typedef TCP_NODELAY. */
@@ -2100,6 +2133,7 @@ static const struct mg_option config_options[] = {
     /* Once for each server */
     {"listening_ports", MG_CONFIG_TYPE_STRING_LIST, "8080"},
     {"num_threads", MG_CONFIG_TYPE_NUMBER, "50"},
+    {"tmp_worker_threads", MG_CONFIG_TYPE_NUMBER, DFT_TMP_WORKERS_STR},
     {"run_as_user", MG_CONFIG_TYPE_STRING, NULL},
     {"tcp_nodelay", MG_CONFIG_TYPE_NUMBER, "0"},
     {"max_request_size", MG_CONFIG_TYPE_NUMBER, "16384"},
@@ -2396,6 +2430,10 @@ struct mg_context {
 	pthread_t masterthreadid; /* The master thread ID */
 	unsigned int
 	    cfg_worker_threads;      /* The number of configured worker threads. */
+
+        // cfg_tmp_worker_threads are in addition to limited cfg_worker_threads PERSISTENT_WORKER_THREADS
+        unsigned int cfg_tmp_worker_threads;  /* number of temporary workers such as for api-gateway-worker-threads */
+
 	pthread_t *worker_threadids; /* The worker thread IDs */
 	unsigned long starter_thread_idx; /* thread index which called mg_start */
 
@@ -2583,6 +2621,7 @@ struct mg_connection {
 	void *tls_user_ptr; /* User defined pointer in thread local storage,
 	                     * for quick access */
         struct mg_conn_stop_ctx * psctrl;
+        struct timeval __tstart;
 };
 
 
@@ -6876,6 +6915,23 @@ handle_request_stat_log(struct mg_connection *conn)
 time_t mg_get_rx_time(struct mg_connection *conn)
 {
 	return conn && (conn->rx_time > 0) ? conn->rx_time : 0 ;
+}
+
+long int mg_get_conn_elapsed_ms(struct mg_connection *conn)
+{
+  long int elapsedms = 0;
+  // printf("%s() Entry \n",__func__);
+  if (conn) {
+    struct timeval tstart = conn->__tstart;
+    struct timeval cur_t = {0};
+    gettimeofday(&cur_t, NULL);
+    if ((tstart.tv_usec > 0) || (tstart.tv_sec > 0)) {
+      elapsedms = ((cur_t.tv_usec - tstart.tv_usec)/1000) +
+			 (cur_t.tv_sec - tstart.tv_sec)*1000;
+      // printf("%s(), conn=%p, elapsedms=%ld \n",__func__, conn, elapsedms);
+    }
+  }
+  return elapsedms;
 }
 
 void mg_conn_set_if_err(struct mg_connection *conn, int val)
@@ -18036,6 +18092,9 @@ mg_connect_client_impl(const struct mg_client_options *client_options,
 		            strerror(ERRNO));
 		return NULL;
 	}
+        gettimeofday(&conn->__tstart, NULL);
+        // printf("%s(), conn=%p, __tstart[%ld sec, %ld usec]\n",__func__, 
+        //                   conn, conn->__tstart.tv_sec, conn->__tstart.tv_usec);
 
 #if defined(GCC_DIAGNOSTIC)
 #pragma GCC diagnostic push
@@ -19353,6 +19412,8 @@ process_new_connection(struct mg_connection *conn)
 	const char *hostend;
 	int reqerr, uri_type;
 
+        gettimeofday(&conn->__tstart, NULL);
+       
 #if defined(USE_SERVER_STATS)
 	ptrdiff_t mcon = mg_atomic_inc(&(conn->phys_ctx->active_connections));
 	mg_atomic_add(&(conn->phys_ctx->total_connections), 1);
@@ -19546,7 +19607,7 @@ static void * tmp_worker_thread(void *thread_func_param) ;
 static int
 spin_tmp_worker(struct mg_context *ctx, const struct socket *sp)
 {
-	if (ctx && sp && (ctx->cur_tmp_workers < MAX_WORKER_THREADS)) {
+	if (ctx && sp) {
 		/* start temporary worker thread with correct sock param. */
 		struct tmp_worker_thread_args *twta =
 		(struct tmp_worker_thread_args *)mg_calloc_ctx(1,
@@ -19601,7 +19662,13 @@ produce_socket(struct mg_context *ctx, const struct socket *sp)
 		}
 
 		/* Now try temporary worker threads */
-		if (ctx->cur_tmp_workers < MAX_WORKER_THREADS) {
+               // printf("%s() cur_tmp_workers=%ld , cfg_tmp_worker_threads=%d t_pending_count=%u\n",
+               //                __func__,ctx->cur_tmp_workers,ctx->cfg_tmp_worker_threads,ctx->t_pending_count);
+                
+               // Ensure the number of created threads(ctx->cur_tmp_workers) and 
+               // yet to be created count(ctx->t_pending_count) are both less than ctx->cfg_tmp_worker_threads
+		if ((ctx->cur_tmp_workers < ctx->cfg_tmp_worker_threads) && 
+                    (ctx->t_pending_count < ctx->cfg_tmp_worker_threads)) {
                         int rc = 0;
                         (void)pthread_mutex_lock(&ctx->thread_mutex);
                          ctx->t_pending_count++;
@@ -19619,7 +19686,8 @@ produce_socket(struct mg_context *ctx, const struct socket *sp)
 			return ;
 		}
 		/* queue is full */
-		mg_sleep(50); //re-try after 50 msec and not in just 1 msec 
+                // printf("%s(queue is full) cur_tmp_workers=%ld , MAX_WORKER_THREADS=%d \n",__func__,ctx->cur_tmp_workers,MAX_WORKER_THREADS);
+		wait_for_tmp_workers();
 	}
 	/* close the accepted socket in case if the process does not exit*/
 	closesocket(sp->sock);
@@ -20104,6 +20172,7 @@ tmp_worker_thread_run(struct tmp_worker_thread_args *thread_args)
 #endif
 	mg_free(conn);
 	mg_atomic_dec(&ctx->cur_tmp_workers);
+        signal_tmp_worker_availability();
 	//printf("Temp worker thread(%ld) finished.  \n",tls.thread_idx);
 	return NULL;
 }
@@ -20623,7 +20692,8 @@ free_context(struct mg_context *ctx)
 	mg_free(ctx);
 
 	/* Call mg_exit_library here */
-        mg_exit_library();
+        // NOTE: DO NOT call mg_exit_library as edge proess will call it on termination
+        // mg_exit_library();
 }
 
 
@@ -21230,6 +21300,15 @@ mg_start2(struct mg_init_data *init, struct mg_error_data *error)
 	}
 
         mg_conn_stop_ctx_init(&ctx->listen_stop, 1);
+
+	ctx->cfg_tmp_worker_threads = atoi(ctx->dd.config[TMP_WORKER_THREADS]);
+        if (!ctx->cfg_tmp_worker_threads) {
+          ctx->cfg_tmp_worker_threads = DFT_TMP_WORKERS;
+        }
+        if (ctx->cfg_tmp_worker_threads >= MAX_WORKER_THREADS) {
+          ctx->cfg_tmp_worker_threads = MAX_WORKER_THREADS -1;
+        }
+        // printf("cfg_tmp_worker_threads=%u \n", ctx->cfg_tmp_worker_threads);
 
 	ctx->cfg_worker_threads = ((unsigned int)(workerthreadcount));
 
