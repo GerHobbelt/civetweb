@@ -1109,33 +1109,6 @@ static pthread_mutexattr_t pthread_mutex_attr;
 #pragma clang diagnostic ignored "-Wunused-function"
 #endif
 
-pthread_mutex_t th_wait_mut = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t  th_wait_cond = PTHREAD_COND_INITIALIZER;
-static void wait_for_tmp_workers();
-static void signal_tmp_worker_availability();
-
-static void wait_for_tmp_workers() {
-  struct timeval now;
-  struct timespec timeout;
-  gettimeofday(&now,NULL);
-  #define TIMED_WAIT_MSEC_TO_NSEC (50 * 1000 * 1000)
-  #define TIMED_WAIT_SEC 1
-
-  timeout.tv_sec = now.tv_sec + TIMED_WAIT_SEC;
-  timeout.tv_nsec = now.tv_usec * 1000;
-  // timeout.tv_nsec += TIMED_WAIT_MSEC_TO_NSEC;
-  pthread_mutex_lock(&th_wait_mut);
-  pthread_cond_timedwait(&th_wait_cond, &th_wait_mut, &timeout);
-  // pthread_cond_wait(&cond, &th_wait_mut);
-  pthread_mutex_unlock(&th_wait_mut);
-}
-
-static void signal_tmp_worker_availability() {
-
-  pthread_mutex_lock(&th_wait_mut);
-   pthread_cond_broadcast(&th_wait_cond);
-  pthread_mutex_unlock(&th_wait_mut);
-}
 
 static pthread_mutex_t global_lock_mutex;
 
@@ -2434,6 +2407,9 @@ struct mg_context {
         // cfg_tmp_worker_threads are in addition to limited cfg_worker_threads PERSISTENT_WORKER_THREADS
         unsigned int cfg_tmp_worker_threads;  /* number of temporary workers such as for api-gateway-worker-threads */
 
+        pthread_mutex_t th_wait_mut; /* tmp threads threshold limit - wait post */
+        pthread_cond_t  th_wait_cond; /* tmp threads threshold limit - wait post */
+
 	pthread_t *worker_threadids; /* The worker thread IDs */
 	unsigned long starter_thread_idx; /* thread index which called mg_start */
 
@@ -2624,6 +2600,8 @@ struct mg_connection {
         struct timeval __tstart;
 };
 
+static void wait_for_tmp_workers(struct mg_context *ctx);
+static void signal_tmp_worker_availability(struct mg_context *ctx);
 
 /* Directory entry */
 struct de {
@@ -19687,7 +19665,7 @@ produce_socket(struct mg_context *ctx, const struct socket *sp)
 		}
 		/* queue is full */
                 // printf("%s(queue is full) cur_tmp_workers=%ld , MAX_WORKER_THREADS=%d \n",__func__,ctx->cur_tmp_workers,MAX_WORKER_THREADS);
-		wait_for_tmp_workers();
+		wait_for_tmp_workers(ctx);
 	}
 	/* close the accepted socket in case if the process does not exit*/
 	closesocket(sp->sock);
@@ -20172,7 +20150,7 @@ tmp_worker_thread_run(struct tmp_worker_thread_args *thread_args)
 #endif
 	mg_free(conn);
 	mg_atomic_dec(&ctx->cur_tmp_workers);
-        signal_tmp_worker_availability();
+        signal_tmp_worker_availability(ctx);
 	//printf("Temp worker thread(%ld) finished.  \n",tls.thread_idx);
 	return NULL;
 }
@@ -20688,6 +20666,9 @@ free_context(struct mg_context *ctx)
 	/* deallocate system name string */
 	mg_free(ctx->systemName);
 
+	(void)pthread_mutex_destroy(&ctx->th_wait_mut);
+	(void)pthread_cond_destroy(&ctx->th_wait_cond);
+
 	/* Deallocate context itself */
 	mg_free(ctx);
 
@@ -20828,6 +20809,33 @@ legacy_init(const char **options)
 	}
 }
 
+static void wait_for_tmp_workers(struct mg_context *ctx) {
+  struct timeval now;
+  struct timespec timeout;
+  gettimeofday(&now,NULL);
+  #define TIMED_WAIT_MSEC_TO_NSEC (50 * 1000 * 1000)
+  #define TIMED_WAIT_SEC 1
+  if (!ctx) {
+    return;
+  }
+  timeout.tv_sec = now.tv_sec + TIMED_WAIT_SEC;
+  timeout.tv_nsec = now.tv_usec * 1000;
+  // timeout.tv_nsec += TIMED_WAIT_MSEC_TO_NSEC;
+  pthread_mutex_lock(&ctx->th_wait_mut);
+  pthread_cond_timedwait(&ctx->th_wait_cond, &ctx->th_wait_mut, &timeout);
+  // pthread_cond_wait(&ctx->th_wait_cond, &ctx->th_wait_mut);
+  pthread_mutex_unlock(&ctx->th_wait_mut);
+}
+
+static void signal_tmp_worker_availability(struct mg_context *ctx) {
+  if (!ctx) {
+    return;
+  }
+  pthread_mutex_lock(&ctx->th_wait_mut);
+   pthread_cond_broadcast(&ctx->th_wait_cond);
+  pthread_mutex_unlock(&ctx->th_wait_mut);
+}
+
 
 struct mg_context *
 mg_start2(struct mg_init_data *init, struct mg_error_data *error)
@@ -20903,6 +20911,9 @@ mg_start2(struct mg_init_data *init, struct mg_error_data *error)
 	ok &= (0 == pthread_cond_init(&ctx->sq_full, NULL));
 	ctx->sq_blocked = 0;
 #endif
+	ok &= (0 == pthread_mutex_init(&ctx->th_wait_mut, &pthread_mutex_attr));
+	ok &= (0 == pthread_cond_init(&ctx->th_wait_cond, NULL));
+
 	ok &= (0 == pthread_mutex_init(&ctx->nonce_mutex, &pthread_mutex_attr));
 #if defined(USE_LUA)
 	ok &= (0 == pthread_mutex_init(&ctx->lua_bg_mutex, &pthread_mutex_attr));
