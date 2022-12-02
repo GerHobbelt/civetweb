@@ -17907,12 +17907,12 @@ close_connection(struct mg_connection *conn)
 	//conn->rx_partial_ms = 0 ;
 	conn->rx_partial_bytes = 0 ;
 
+	mg_lock_connection(conn);
+
         if (conn->psctrl) {
            //printf("%s() conn=%p conn->psctrl=%p\n",__func__,conn,conn->psctrl);
            mg_close_stop_ctx(conn->psctrl);
         }
-
-	mg_lock_connection(conn);
 
 	/* Set close flag, so keep-alive loops will stop */
 	conn->must_close = 1;
