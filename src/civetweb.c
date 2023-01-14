@@ -9685,6 +9685,12 @@ connect_socket(struct mg_context *ctx /* may be NULL */,
           }
         }
 
+        if (use_ssl) {
+          int nodelay_on = 1;
+          // printf("%s() setting TCP_NODELAY sd=%d use_ssl=%d \n",__func__,*sock,use_ssl);
+          setsockopt(*sock, IPPROTO_TCP, TCP_NODELAY, &nodelay_on, sizeof(nodelay_on));
+        }
+
 	if (conn_ret != 0) {
 		struct sockaddr_in srcaddr;
                 char srcIp[30] = {0};
