@@ -2108,7 +2108,7 @@ static const struct mg_option config_options[] = {
     {"num_threads", MG_CONFIG_TYPE_NUMBER, "50"},
     {"tmp_worker_threads", MG_CONFIG_TYPE_NUMBER, DFT_TMP_WORKERS_STR},
     {"run_as_user", MG_CONFIG_TYPE_STRING, NULL},
-    {"tcp_nodelay", MG_CONFIG_TYPE_NUMBER, "0"},
+    {"tcp_nodelay", MG_CONFIG_TYPE_NUMBER, "1"},
     {"max_request_size", MG_CONFIG_TYPE_NUMBER, "16384"},
     {"linger_timeout_ms", MG_CONFIG_TYPE_NUMBER, NULL},
     {"connection_queue", MG_CONFIG_TYPE_NUMBER, "20"},
@@ -9496,6 +9496,7 @@ connect_socket(struct mg_context *ctx /* may be NULL */,
         int timeout_ms = 0;
         int domain = 0;
         int rc = 0;
+        int nodelay_on = 1;
         struct sockaddr * pSaddr = NULL;
         socklen_t addrLen = 0;
 
@@ -9685,11 +9686,10 @@ connect_socket(struct mg_context *ctx /* may be NULL */,
           }
         }
 
-        if (use_ssl) {
-          int nodelay_on = 1;
+     // if (use_ssl) {
           // printf("%s() setting TCP_NODELAY sd=%d use_ssl=%d \n",__func__,*sock,use_ssl);
           setsockopt(*sock, IPPROTO_TCP, TCP_NODELAY, &nodelay_on, sizeof(nodelay_on));
-        }
+     // }
 
 	if (conn_ret != 0) {
 		struct sockaddr_in srcaddr;
