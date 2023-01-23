@@ -116,6 +116,10 @@ option(CIVETWEB_INSTALL_EXECUTABLE "Enable installing CivetWeb executable" ON)
 mark_as_advanced(FORCE CIVETWEB_INSTALL_EXECUTABLE) # Advanced users can disable
 message(STATUS "Executable installation - ${CIVETWEB_INSTALL_EXECUTABLE}")
 
+# Unix socket support
+option(CIVETWEB_ENABLE_X_DOM_SOCKET "Enable usage of unix domain sockets" OFF)
+message(STATUS "Unix domain socket support - ${CIVETWEB_ENABLE_X_DOM_SOCKET}")
+
 # Allow builds to complete with warnings (do not set -Werror)
 # CivetWeb Linux support is stable:
 # Builds for GCC 4.6 and clang 3.4 are free from warnings.
@@ -509,6 +513,9 @@ if (CIVETWEB_ENABLE_LUA)
 endif()
 if (CIVETWEB_ENABLE_ZLIB)
   add_definitions(-DUSE_ZLIB)
+endif()
+if (CIVETWEB_ENABLE_X_DOM_SOCKET)
+  add_definitions(-DUSE_X_DOM_SOCKET)
 endif()
 if (CIVETWEB_ENABLE_DUKTAPE)
   add_definitions(-DUSE_DUKTAPE)
