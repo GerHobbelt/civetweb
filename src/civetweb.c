@@ -17675,10 +17675,8 @@ set_tcp_nodelay(const struct socket *so, int nodelay_on)
 static void
 close_socket_gracefully(struct mg_connection *conn)
 {
-#if defined(_WIN32)
 	char buf[MG_BUF_LEN];
 	int n;
-#endif
 	struct linger linger;
 	int error_code = 0;
 	int linger_timeout = -2;
@@ -17696,7 +17694,6 @@ close_socket_gracefully(struct mg_connection *conn)
 	/* Send FIN to the client */
 	shutdown(conn->client.sock, SHUTDOWN_WR);
 
-#if defined(_WIN32)
 	/* Read and discard pending incoming data. If we do not do that and
 	 * close
 	 * the socket, the data in the send buffer may be discarded. This
@@ -17706,7 +17703,6 @@ close_socket_gracefully(struct mg_connection *conn)
 	do {
 		n = pull_inner(NULL, conn, buf, sizeof(buf), /* Timeout in s: */ 1.0);
 	} while (n > 0);
-#endif
 
 	if (conn->dom_ctx->config[LINGER_TIMEOUT]) {
 		linger_timeout = atoi(conn->dom_ctx->config[LINGER_TIMEOUT]);
