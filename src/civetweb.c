@@ -21468,6 +21468,7 @@ mg_start2(struct mg_init_data *init, struct mg_error_data *error)
 	}
 
         // Initialize all sock to INVALID_SOCKET as 0 is a valid sd
+        // Using a separate loop to ensure sock gets initialized to INVALID_SOCKET for all the blocks
 	for (i = 0; i < ctx->cfg_worker_threads; i++) {
           ctx->client_socks[i].sock = INVALID_SOCKET;
 	}
