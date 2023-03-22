@@ -937,7 +937,6 @@ typedef unsigned short int in_port_t;
 #if !defined(O_BINARY)
 #define O_BINARY (0)
 #endif /* O_BINARY */
-#define closesocket(a) (close(a))
 #define mg_mkdir(conn, path, mode) (mkdir(path, mode))
 #define mg_remove(conn, x) (remove(x))
 #define mg_sleep(x) (usleep((x)*1000))
@@ -971,6 +970,38 @@ typedef int SOCKET;
 #define mg_pollfd pollfd
 
 #endif /* defined(_WIN32) - WINDOWS vs UNIX include block */
+
+// FDSAN_DEBUG debug changes
+#ifdef FDSAN_DEBUG
+
+// NOTE-IMPORTANT: enclose call to closesocket here within () as (closesocket):
+// to avoid macro doing recursive substitution.
+
+#if defined (_WIN32)
+#define closesocket(a) do { \
+                            fprintf(stderr,"[fdsan] fd=%d, time=%ld, fn=close()\n", (a), time(NULL)); \
+                            (closesocket)(a); \
+                       } while(0)
+#else
+#define closesocket(a) do { \
+                            fprintf(stderr,"[fdsan] fd=%d, time=%ld, fn=close()\n", (a), time(NULL)); \
+                            close(a); \
+                       } while(0)
+#endif
+
+#define socket(a, b, c) fdsan_socket((a), (b), (c))
+static int fdsan_socket(int a, int b, int c);
+static int fdsan_socket(int a, int b, int c) {
+        // NOTE-IMPORTANT: enclose call to socket here within () as (socket):
+        // to define macro doing recursive fdsan_socket substitution.
+	int fd = (socket)(a, b, c);
+	fprintf(stderr,"[fdsan] fd=%d, time=%ld, fn=socket()\n", fd, time(NULL));
+	return fd;
+}
+#else
+#define closesocket(a) (close(a))
+#endif
+
 
 /* In case our C library is missing "timegm", provide an implementation */
 #if defined(NEED_TIMEGM)
@@ -1949,7 +1980,7 @@ struct socket {
 	unsigned char is_ssl;    /* Is port SSL-ed */
 	unsigned char ssl_redir; /* Is port supposed to redirect everything to SSL
 	                          * port */
-	unsigned char in_use;    /* 0: invalid, 1: valid, 2: free */
+	unsigned char in_use;    /* 0: idle, 1: valid */
 };
 
 
@@ -15704,7 +15735,7 @@ int mg_close_stop_ctx(struct mg_conn_stop_ctx *psctrl)
      return -1;
    }
 
-   if (psctrl->sd > 0) {
+   if (psctrl->sd != INVALID_SOCKET) {
       //printf("%s(), closing sd = %d \n", __func__,psctrl->sd );
       closesocket(psctrl->sd);
    }
@@ -19687,21 +19718,26 @@ consume_socket(struct mg_context *ctx, struct socket *sp, int thread_index)
         }
 	DEBUG_TRACE("%s", "going idle");
         (void)pthread_mutex_lock(&ctx->thread_mutex);
-	ctx->client_socks[thread_index].in_use = 0;
+        // Reset the whole client_socks[thread_index] or atleat in_use and sock
+        // before going to waiting in idle state to avoid double close(sd)
+        ctx->client_socks[thread_index].in_use = 0;
+        ctx->client_socks[thread_index].sock = INVALID_SOCKET;
         (void)pthread_mutex_unlock(&ctx->thread_mutex);
 
 	event_wait(ctx->client_wait_events[thread_index]);
 
         (void)pthread_mutex_lock(&ctx->thread_mutex);
 	*sp = ctx->client_socks[thread_index];
-        (void)pthread_mutex_unlock(&ctx->thread_mutex);
-
 	 if (ctx->stop_flag) {
-           if (sp->sock > 0) {
+           if (sp->sock != INVALID_SOCKET) {
 	      closesocket(sp->sock);
-	      return 0;
+              ctx->client_socks[thread_index].sock = INVALID_SOCKET;
+              sp->sock = INVALID_SOCKET;
+              (void)pthread_mutex_unlock(&ctx->thread_mutex);
+              return 0;
            }
 	}
+        (void)pthread_mutex_unlock(&ctx->thread_mutex);
         DEBUG_TRACE("grabbed socket %d, going busy",sp->sock);
 	return !ctx->stop_flag;
 }
@@ -20234,8 +20270,12 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 #endif
 	memset(&so, 0, sizeof(so));
 
-	if ((so.sock = accept(listener->sock, &so.rsa.sa, &len))
-	    == INVALID_SOCKET) {
+	so.sock = accept(listener->sock, &so.rsa.sa, &len);
+#ifdef FDSAN_DEBUG
+	fprintf(stderr,"[fdsan] fd=%d, time=%ld, fn=accept()\n", so.sock, time(NULL));
+#endif
+	if (so.sock  == INVALID_SOCKET) {
+          return;
 	} else if (check_acl(ctx, &so.rsa) != 1) {
 		sockaddr_to_string(src_addr, sizeof(src_addr), &so.rsa);
 		mg_cry_ctx_internal(ctx,
@@ -20313,7 +20353,6 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 
                 //NOTE: default blocking socket is prefered due to issues in error handling with non blocking
                 set_blocking_mode(so.sock);
-		so.in_use = 0;
 		produce_socket(ctx, &so);
 	}
 }
@@ -20471,9 +20510,11 @@ master_thread_run(struct mg_context *ctx)
 		event_signal(ctx->client_wait_events[i]);
 
 		/* Since we know all sockets, we can shutdown the connections. */ 
-		if (ctx->client_socks[i].in_use) {
+           (void)pthread_mutex_lock(&ctx->thread_mutex);
+		if (ctx->client_socks[i].in_use && (ctx->client_socks[i].sock != INVALID_SOCKET)) {
 			shutdown(ctx->client_socks[i].sock, SHUTDOWN_BOTH);
 		}
+            (void)pthread_mutex_unlock(&ctx->thread_mutex);
 	}
 #endif
 
