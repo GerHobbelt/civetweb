@@ -937,7 +937,6 @@ typedef unsigned short int in_port_t;
 #if !defined(O_BINARY)
 #define O_BINARY (0)
 #endif /* O_BINARY */
-#define closesocket(a) (close(a))
 #define mg_mkdir(conn, path, mode) (mkdir(path, mode))
 #define mg_remove(conn, x) (remove(x))
 #define mg_sleep(x) (usleep((x)*1000))
@@ -971,6 +970,38 @@ typedef int SOCKET;
 #define mg_pollfd pollfd
 
 #endif /* defined(_WIN32) - WINDOWS vs UNIX include block */
+
+// FDSAN_DEBUG debug changes
+#ifdef FDSAN_DEBUG
+
+// NOTE-IMPORTANT: enclose call to closesocket here within () as (closesocket):
+// to avoid macro doing recursive substitution.
+
+#if defined (_WIN32)
+#define closesocket(a) do { \
+                            fprintf(stderr,"[fdsan] fd=%d, time=%ld, fn=close()\n", (a), time(NULL)); \
+                            (closesocket)(a); \
+                       } while(0)
+#else
+#define closesocket(a) do { \
+                            fprintf(stderr,"[fdsan] fd=%d, time=%ld, fn=close()\n", (a), time(NULL)); \
+                            close(a); \
+                       } while(0)
+#endif
+
+#define socket(a, b, c) fdsan_socket((a), (b), (c))
+static int fdsan_socket(int a, int b, int c);
+static int fdsan_socket(int a, int b, int c) {
+        // NOTE-IMPORTANT: enclose call to socket here within () as (socket):
+        // to define macro doing recursive fdsan_socket substitution.
+	int fd = (socket)(a, b, c);
+	fprintf(stderr,"[fdsan] fd=%d, time=%ld, fn=socket()\n", fd, time(NULL));
+	return fd;
+}
+#else
+#define closesocket(a) (close(a))
+#endif
+
 
 /* In case our C library is missing "timegm", provide an implementation */
 #if defined(NEED_TIMEGM)
@@ -1949,7 +1980,7 @@ struct socket {
 	unsigned char is_ssl;    /* Is port SSL-ed */
 	unsigned char ssl_redir; /* Is port supposed to redirect everything to SSL
 	                          * port */
-	unsigned char in_use;    /* 0: invalid, 1: valid, 2: free */
+	unsigned char in_use;    /* 0: idle, 1: valid */
 };
 
 
@@ -6554,7 +6585,7 @@ pull_inner(FILE *fp,
 		} else {
 			pfd[0].fd = conn->client.sock;
 			pfd[0].events = POLLIN;
-                       if (conn->psctrl && (conn->psctrl->sd > 0)) {
+                       if (conn->psctrl && (conn->psctrl->sd != INVALID_SOCKET)) {
 		          pfd[1].fd = conn->psctrl->sd;
 		          pfd[1].events = POLLIN;
                           n++;
@@ -6569,7 +6600,7 @@ pull_inner(FILE *fp,
  
                          //Drain the data just in case, also we can check if the
                          //received data value is same as received from socket
-             		  if ((pollres > 0) && (conn->psctrl->sd > 0) && (n == 2) && (pfd[1].revents & POLLIN)) {
+             		  if ((pollres > 0) && (conn->psctrl->sd != INVALID_SOCKET) && (n == 2) && (pfd[1].revents & POLLIN)) {
                            int val = 0;
                            int r = recvfrom(conn->psctrl->sd, (char *)&val, sizeof(int), 0, NULL, NULL);
                            //if ( r < 0 ) {
@@ -9411,7 +9442,7 @@ static int connect_socket_with_timeout(SOCKET sd, struct sockaddr * pSaddr, sock
 		  }
 		  return -1;
 	       }
-               if (psctrl->sd > 0) {
+               if (psctrl->sd != INVALID_SOCKET) {
 	          FD_ZERO(&ctrl_rdfd);
 	          psctrl_rdfd = &ctrl_rdfd;
 	          FD_SET(psctrl->sd, psctrl_rdfd);
@@ -9446,7 +9477,7 @@ static int connect_socket_with_timeout(SOCKET sd, struct sockaddr * pSaddr, sock
             if (psctrl && (psctrl->stop_now > 0)) {
                //printf("%s(CONNECT_STOP_NOW)  psctrl=%p stop_now\n", __func__,psctrl);
                //Drain the data for now, just in case. If needed we can also further validate received data.
-	       if (psctrl_rdfd && (rc > 0) && (psctrl->sd > 0) && (FD_ISSET(psctrl->sd, psctrl_rdfd))) {
+	       if (psctrl_rdfd && (rc > 0) && (psctrl->sd != INVALID_SOCKET) && (FD_ISSET(psctrl->sd, psctrl_rdfd))) {
                   int val = 0;
                   int r = recvfrom(psctrl->sd, (char *)&val, sizeof(int), 0, NULL, NULL);
                    //if (r < 0) {
@@ -13574,7 +13605,7 @@ mg_ws_get_client_sock_bound_addr(struct mg_connection *conn, void *pto)
 		pto = &to ;
 	}
 	memset(pto, 0, sizeof(struct sockaddr));
-	if((conn) || (conn->client.sock > 0)) {
+	if((conn) || (conn->client.sock != INVALID_SOCKET)) {
 		int rc = 0 ;
 		/* get sock bound tuple address using getsockname() */
 		rc = getsockname(conn->client.sock, (struct sockaddr*)pto, &l);
@@ -15604,6 +15635,7 @@ int mg_conn_stop_ctx_init(struct mg_conn_stop_ctx *psctrl, int immediate)
    }
 
    memset(psctrl, 0, sizeof(struct mg_conn_stop_ctx));
+   psctrl->sd = INVALID_SOCKET;
 
    if (immediate) {
 
@@ -15678,7 +15710,7 @@ int mg_signal_stop_ctx(struct mg_conn_stop_ctx *psctrl)
    psctrl->stop_now = 1 ;
    
    //second: try to send some data, so that poll will wake up
-   if ((psctrl->sd > 0) && (psctrl->bound_port > 0)) {
+   if ((psctrl->sd != INVALID_SOCKET) && (psctrl->bound_port > 0)) {
       //self send a udp with its 4 bytes sd value as payload
       struct sockaddr_in to_addr;
       memset(&to_addr, 0, sizeof(to_addr));
@@ -15704,7 +15736,7 @@ int mg_close_stop_ctx(struct mg_conn_stop_ctx *psctrl)
      return -1;
    }
 
-   if (psctrl->sd > 0) {
+   if (psctrl->sd != INVALID_SOCKET) {
       //printf("%s(), closing sd = %d \n", __func__,psctrl->sd );
       closesocket(psctrl->sd);
    }
@@ -18249,7 +18281,7 @@ conn->dom_ctx->config[WEBSOCKET_TIMEOUT] = "10000";
 			return NULL;
 		}
 
-		if (conn->client.sock > 0) {
+		if (conn->client.sock != INVALID_SOCKET) {
 			//SSL_MODE_AUTO_RETRY helps with SSL_ERROR_WANT_READ, if underlying BIO is blocking
 			SSL_set_mode(conn->ssl, SSL_MODE_AUTO_RETRY);
 			//printf("%s() sock=%d conn->ssl=%x setting SSL_MODE_AUTO_RETRY \n",
@@ -19589,7 +19621,7 @@ static void * tmp_worker_thread(void *thread_func_param) ;
 #endif /* _WIN32 */
 
 static int
-spin_tmp_worker(struct mg_context *ctx, const struct socket *sp)
+spin_tmp_worker(struct mg_context *ctx, struct socket *sp)
 {
 	if (ctx && sp) {
 		/* start temporary worker thread with correct sock param. */
@@ -19599,6 +19631,7 @@ spin_tmp_worker(struct mg_context *ctx, const struct socket *sp)
 		if (!twta) {
 		    printf("calloc failed for twta error %ld",(long)ERRNO);
 		    closesocket(sp->sock);
+	            sp->sock = INVALID_SOCKET;
 		    return -1;
 		}
 
@@ -19609,6 +19642,7 @@ spin_tmp_worker(struct mg_context *ctx, const struct socket *sp)
 		if (mg_start_thread(tmp_worker_thread, twta) != 0) {
 			//log thread failure, close sock
 		   closesocket(sp->sock);
+	           sp->sock = INVALID_SOCKET;
 		   mg_free(twta);
 		   printf("Cannot create threads: error %ld",(long)ERRNO);
 		   return -1;
@@ -19621,7 +19655,7 @@ spin_tmp_worker(struct mg_context *ctx, const struct socket *sp)
 
 #if defined(ALTERNATIVE_QUEUE)
 static void
-produce_socket(struct mg_context *ctx, const struct socket *sp)
+produce_socket(struct mg_context *ctx, struct socket *sp)
 {
 	unsigned int i;
 
@@ -19675,6 +19709,7 @@ produce_socket(struct mg_context *ctx, const struct socket *sp)
 	}
 	/* close the accepted socket in case if the process does not exit*/
 	closesocket(sp->sock);
+	sp->sock = INVALID_SOCKET;
 }
 
 
@@ -19687,21 +19722,26 @@ consume_socket(struct mg_context *ctx, struct socket *sp, int thread_index)
         }
 	DEBUG_TRACE("%s", "going idle");
         (void)pthread_mutex_lock(&ctx->thread_mutex);
-	ctx->client_socks[thread_index].in_use = 0;
+        // Reset the whole client_socks[thread_index] or atleat in_use and sock
+        // before going to waiting in idle state to avoid double close(sd)
+        ctx->client_socks[thread_index].in_use = 0;
+        ctx->client_socks[thread_index].sock = INVALID_SOCKET;
         (void)pthread_mutex_unlock(&ctx->thread_mutex);
 
 	event_wait(ctx->client_wait_events[thread_index]);
 
         (void)pthread_mutex_lock(&ctx->thread_mutex);
 	*sp = ctx->client_socks[thread_index];
-        (void)pthread_mutex_unlock(&ctx->thread_mutex);
-
 	 if (ctx->stop_flag) {
-           if (sp->sock > 0) {
+           if (sp->sock != INVALID_SOCKET) {
 	      closesocket(sp->sock);
-	      return 0;
+              ctx->client_socks[thread_index].sock = INVALID_SOCKET;
+              sp->sock = INVALID_SOCKET;
+              (void)pthread_mutex_unlock(&ctx->thread_mutex);
+              return 0;
            }
 	}
+        (void)pthread_mutex_unlock(&ctx->thread_mutex);
         DEBUG_TRACE("grabbed socket %d, going busy",sp->sock);
 	return !ctx->stop_flag;
 }
@@ -20234,8 +20274,12 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 #endif
 	memset(&so, 0, sizeof(so));
 
-	if ((so.sock = accept(listener->sock, &so.rsa.sa, &len))
-	    == INVALID_SOCKET) {
+	so.sock = accept(listener->sock, &so.rsa.sa, &len);
+#ifdef FDSAN_DEBUG
+	fprintf(stderr,"[fdsan] fd=%d, time=%ld, fn=accept()\n", so.sock, time(NULL));
+#endif
+	if (so.sock  == INVALID_SOCKET) {
+          return;
 	} else if (check_acl(ctx, &so.rsa) != 1) {
 		sockaddr_to_string(src_addr, sizeof(src_addr), &so.rsa);
 		mg_cry_ctx_internal(ctx,
@@ -20313,7 +20357,6 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 
                 //NOTE: default blocking socket is prefered due to issues in error handling with non blocking
                 set_blocking_mode(so.sock);
-		so.in_use = 0;
 		produce_socket(ctx, &so);
 	}
 }
@@ -20411,7 +20454,7 @@ master_thread_run(struct mg_context *ctx)
 
 		ctrlidx = 0; //reset
 		ctrlfd_cnt = 0;
-		if ((i > 0) && (ctx->listen_stop.sd > 0)) {
+		if ((i > 0) && (ctx->listen_stop.sd != INVALID_SOCKET)) {
 		   pfd[i].fd = ctx->listen_stop.sd;
 		   pfd[i].events = POLLIN;
 		   ctrlidx = i;
@@ -20471,9 +20514,11 @@ master_thread_run(struct mg_context *ctx)
 		event_signal(ctx->client_wait_events[i]);
 
 		/* Since we know all sockets, we can shutdown the connections. */ 
-		if (ctx->client_socks[i].in_use) {
+           (void)pthread_mutex_lock(&ctx->thread_mutex);
+		if (ctx->client_socks[i].in_use && (ctx->client_socks[i].sock != INVALID_SOCKET)) {
 			shutdown(ctx->client_socks[i].sock, SHUTDOWN_BOTH);
 		}
+            (void)pthread_mutex_unlock(&ctx->thread_mutex);
 	}
 #endif
 
@@ -21420,6 +21465,12 @@ mg_start2(struct mg_init_data *init, struct mg_error_data *error)
 		free_context(ctx);
 		pthread_setspecific(sTlsKey, NULL);
 		return NULL;
+	}
+
+        // Initialize all sock to INVALID_SOCKET as 0 is a valid sd
+        // Using a separate loop to ensure sock gets initialized to INVALID_SOCKET for all the blocks
+	for (i = 0; i < ctx->cfg_worker_threads; i++) {
+          ctx->client_socks[i].sock = INVALID_SOCKET;
 	}
 
 	for (i = 0; (unsigned)i < ctx->cfg_worker_threads; i++) {
