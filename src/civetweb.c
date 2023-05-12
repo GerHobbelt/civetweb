@@ -15691,6 +15691,7 @@ int mg_conn_stop_ctx_init(struct mg_conn_stop_ctx *psctrl, int immediate)
 	 return -1;
       }
       psctrl->sd = sd;
+      psctrl->sc_init = 1;
   }
 
    return 0;
@@ -15708,6 +15709,12 @@ int mg_signal_stop_ctx(struct mg_conn_stop_ctx *psctrl)
 
    //first:  set stop_now to 1;
    psctrl->stop_now = 1 ;
+
+   if (!psctrl->sc_init) {
+     // printf("%s(), sd:%d sc_init is not initialized returning.\n",
+     //             __func__, psctrl->sd);
+     return -1;
+   }
    
    //second: try to send some data, so that poll will wake up
    if ((psctrl->sd != INVALID_SOCKET) && (psctrl->bound_port > 0)) {
@@ -15733,6 +15740,12 @@ int mg_close_stop_ctx(struct mg_conn_stop_ctx *psctrl)
 {
 
    if (!psctrl) {
+     return -1;
+   }
+
+   if (!psctrl->sc_init) {
+     // printf("%s(), sd:%d sc_init is not initialized returning.\n",
+     //             __func__, psctrl->sd);
      return -1;
    }
 
