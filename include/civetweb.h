@@ -1470,6 +1470,7 @@ CIVETWEB_API struct mg_connection *mg_connect_client(const char *host,
 
 
 typedef struct mg_conn_stop_ctx {
+      int sc_init;
 #if defined(_WIN32)
       long long unsigned int sd;
 #else
