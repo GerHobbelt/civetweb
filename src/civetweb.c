@@ -1999,7 +1999,6 @@ enum {
 	                     * socket option typedef TCP_NODELAY. */
 	MAX_REQUEST_SIZE,
 	LINGER_TIMEOUT,
-	CONNECTION_QUEUE_SIZE,
 	LISTEN_BACKLOG_SIZE,
 #if defined(__linux__) || (defined(TARGET_OS_OSX) && defined(MACOS_SENDFILE))
 	ALLOW_SENDFILE_CALL,
@@ -2142,7 +2141,6 @@ static const struct mg_option config_options[] = {
     {"tcp_nodelay", MG_CONFIG_TYPE_NUMBER, "1"},
     {"max_request_size", MG_CONFIG_TYPE_NUMBER, "16384"},
     {"linger_timeout_ms", MG_CONFIG_TYPE_NUMBER, NULL},
-    {"connection_queue", MG_CONFIG_TYPE_NUMBER, "20"},
     {"listen_backlog", MG_CONFIG_TYPE_NUMBER, "200"},
 #if defined(__linux__) || (defined(TARGET_OS_OSX) && defined(MACOS_SENDFILE))
     {"allow_sendfile_call", MG_CONFIG_TYPE_BOOLEAN, "yes"},
@@ -19830,9 +19828,8 @@ worker_thread_run(struct mg_connection *conn)
 	conn->conn_state = 1; /* not consumed */
 #endif
 
-	/* Call consume_socket() even when ctx->stop_flag > 0, to let it
-	 * signal sq_empty condvar to wake up the master waiting in
-	 * produce_socket() */
+	/* Call consume_socket() even when ctx->stop_flag > 0,
+         * to wake up the master waiting in produce_socket() */
 	while (consume_socket(ctx, &conn->client, thread_index)) {
 
 		/* New connections must start with new protocol negotiation */
@@ -20660,10 +20657,6 @@ free_context(struct mg_context *ctx)
 		}
 		mg_free(ctx->client_wait_events);
 	}
-#else
-	(void)pthread_cond_destroy(&ctx->sq_empty);
-	(void)pthread_cond_destroy(&ctx->sq_full);
-	mg_free(ctx->squeue);
 #endif
 
 	/* Destroy other context global data structures mutex */
@@ -20969,18 +20962,36 @@ mg_start2(struct mg_init_data *init, struct mg_error_data *error)
 #endif
 	pthread_setspecific(sTlsKey, &tls);
 
-	ok = (0 == pthread_mutex_init(&ctx->thread_mutex, &pthread_mutex_attr));
-#if !defined(ALTERNATIVE_QUEUE)
-	ok &= (0 == pthread_cond_init(&ctx->sq_empty, NULL));
-	ok &= (0 == pthread_cond_init(&ctx->sq_full, NULL));
-	ctx->sq_blocked = 0;
-#endif
-	ok &= (0 == pthread_mutex_init(&ctx->th_wait_mut, &pthread_mutex_attr));
-	ok &= (0 == pthread_cond_init(&ctx->th_wait_cond, NULL));
+        ok = 1; //assume true, but set to false on failure to initialze thread synchronization objects
+	if (0 != pthread_mutex_init(&ctx->thread_mutex, &pthread_mutex_attr)) {
+           ok = 0;
+        }
 
-	ok &= (0 == pthread_mutex_init(&ctx->nonce_mutex, &pthread_mutex_attr));
+	if (ok && (0 != pthread_mutex_init(&ctx->th_wait_mut, &pthread_mutex_attr))) {
+	   (void)pthread_mutex_destroy(&ctx->thread_mutex);
+           ok = 0;
+        }
+
+	if (ok && (0 != pthread_cond_init(&ctx->th_wait_cond, NULL))) {
+	   (void)pthread_mutex_destroy(&ctx->th_wait_mut);
+	   (void)pthread_mutex_destroy(&ctx->thread_mutex);
+           ok = 0;
+        }
+
+	if (ok && (0 != pthread_mutex_init(&ctx->nonce_mutex, &pthread_mutex_attr))) {
+	   (void)pthread_cond_destroy(&ctx->th_wait_cond);
+	   (void)pthread_mutex_destroy(&ctx->th_wait_mut);
+	   (void)pthread_mutex_destroy(&ctx->thread_mutex);
+           ok = 0;
+        }
 #if defined(USE_LUA)
-	ok &= (0 == pthread_mutex_init(&ctx->lua_bg_mutex, &pthread_mutex_attr));
+	if (ok && (0 != pthread_mutex_init(&ctx->lua_bg_mutex, &pthread_mutex_attr))) {
+	   (void)pthread_mutex_destroy(&ctx->nonce_mutex);
+	   (void)pthread_cond_destroy(&ctx->th_wait_cond);
+	   (void)pthread_mutex_destroy(&ctx->th_wait_mut);
+	   (void)pthread_mutex_destroy(&ctx->thread_mutex);
+           ok = 0;
+        }
 #endif
 	if (!ok) {
 		const char *err_msg =
@@ -21086,46 +21097,6 @@ mg_start2(struct mg_init_data *init, struct mg_error_data *error)
 		return NULL;
 	}
 	ctx->max_request_size = (unsigned)itmp;
-
-	/* Queue length */
-#if !defined(ALTERNATIVE_QUEUE)
-	itmp = atoi(ctx->dd.config[CONNECTION_QUEUE_SIZE]);
-	if (itmp < 1) {
-		mg_cry_ctx_internal(ctx,
-		                    "%s too small",
-		                    config_options[CONNECTION_QUEUE_SIZE].name);
-		if ((error != NULL) && (error->text_buffer_size > 0)) {
-			mg_snprintf(NULL,
-			            NULL, /* No truncation check for error buffers */
-			            error->text,
-			            error->text_buffer_size,
-			            "Invalid configuration option value: %s",
-			            config_options[CONNECTION_QUEUE_SIZE].name);
-		}
-		free_context(ctx);
-		pthread_setspecific(sTlsKey, NULL);
-		return NULL;
-	}
-	ctx->squeue =
-	    (struct socket *)mg_calloc((unsigned int)itmp, sizeof(struct socket));
-	if (ctx->squeue == NULL) {
-		mg_cry_ctx_internal(ctx,
-		                    "Out of memory: Cannot allocate %s",
-		                    config_options[CONNECTION_QUEUE_SIZE].name);
-		if ((error != NULL) && (error->text_buffer_size > 0)) {
-			mg_snprintf(NULL,
-			            NULL, /* No truncation check for error buffers */
-			            error->text,
-			            error->text_buffer_size,
-			            "Out of memory: Cannot allocate %s",
-			            config_options[CONNECTION_QUEUE_SIZE].name);
-		}
-		free_context(ctx);
-		pthread_setspecific(sTlsKey, NULL);
-		return NULL;
-	}
-	ctx->sq_size = itmp;
-#endif
 
 	/* Worker thread count option */
 	workerthreadcount = atoi(ctx->dd.config[NUM_THREADS]);
@@ -22329,31 +22300,6 @@ mg_get_context_info(const struct mg_context *ctx, char *buffer, int buflen)
 		            total_connections,
 		            eol);
 		context_info_length += mg_str_append(&buffer, end, block);
-
-		/* Queue information */
-#if !defined(ALTERNATIVE_QUEUE)
-		mg_snprintf(NULL,
-		            NULL,
-		            block,
-		            sizeof(block),
-		            ",%s\"queue\" : {%s"
-		            "\"length\" : %i,%s"
-		            "\"filled\" : %i,%s"
-		            "\"maxFilled\" : %i,%s"
-		            "\"full\" : %s%s"
-		            "}",
-		            eol,
-		            eol,
-		            ctx->sq_size,
-		            eol,
-		            ctx->sq_head - ctx->sq_tail,
-		            eol,
-		            ctx->sq_max_fill,
-		            eol,
-		            (ctx->sq_blocked ? "true" : "false"),
-		            eol);
-		context_info_length += mg_str_append(&buffer, end, block);
-#endif
 
 		/* Requests information */
 		mg_snprintf(NULL,
