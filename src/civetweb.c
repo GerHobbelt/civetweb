@@ -3327,7 +3327,7 @@ sockaddr_to_string(char *buf, size_t len, const union usa *usa)
 		0,
 		NI_NUMERICHOST);
 		*/
-		mg_strlcpy(buf, UNIX_DOMAIN_SOCKET_SERVER_NAME, len)
+		mg_strlcpy(buf, UNIX_DOMAIN_SOCKET_SERVER_NAME, len);
 	}
 #endif
 }
@@ -5964,15 +5964,18 @@ mg_poll(struct mg_pollfd *pfd,
 
 		result = poll(pfd, n, ms_now);
 		if (result != 0) {
-			/* Poll returned either success (1) or error (-1).
-			 * Forward both to the caller. */
-			if ((check_pollerr)
-			    && ((pfd[0].revents & (POLLIN | POLLOUT | POLLERR))
-			        == POLLERR)) {
-				/* One and only file descriptor returned error */
-				return -1;
+			int err = ERRNO;
+			if (!ERROR_TRY_AGAIN(err)) {
+				/* Poll returned either success (1) or error (-1).
+				 * Forward both to the caller. */
+				if ((check_pollerr)
+				    && ((pfd[0].revents & (POLLIN | POLLOUT | POLLERR))
+				        == POLLERR)) {
+					/* One and only file descriptor returned error */
+					return -1;
+				}
+				return result;
 			}
-			return result;
 		}
 
 		/* Poll returned timeout (0). */
@@ -14703,7 +14706,8 @@ handle_request(struct mg_connection *conn)
 		url_decode_in_place((char *)ri->local_uri);
 	}
 
-	/* URL decode the query-string only if explicitly set in the configuration */
+	/* URL decode the query-string only if explicitly set in the configuration
+	 */
 	if (conn->request_info.query_string) {
 		if (should_decode_query_string(conn)) {
 			url_decode_in_place((char *)conn->request_info.query_string);
