@@ -438,10 +438,12 @@ _civet_safe_clock_gettime(int clk_id, struct timespec *t)
 #endif
 
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#define ERROR_TRY_AGAIN(err) ((err) == WSAEWOULDBLOCK)
+#else
 /* Unix might return different error codes indicating to try again.
  * For Linux EAGAIN==EWOULDBLOCK, maybe EAGAIN!=EWOULDBLOCK is history from
- * decades ago, but better check both and let the compile optimize it. */
+ * decades ago, but better check both and let the compiler optimize it. */
 #define ERROR_TRY_AGAIN(err)                                                   \
 	(((err) == EAGAIN) || ((err) == EWOULDBLOCK) || ((err) == EINTR))
 #endif
@@ -6086,17 +6088,10 @@ push_inner(struct mg_context *ctx,
 		} else {
 			n = (int)send(sock, buf, (len_t)len, MSG_NOSIGNAL);
 			err = (n < 0) ? ERRNO : 0;
-#if defined(_WIN32)
-			if (err == WSAEWOULDBLOCK) {
-				err = 0;
-				n = 0;
-			}
-#else
 			if (ERROR_TRY_AGAIN(err)) {
 				err = 0;
 				n = 0;
 			}
-#endif
 			if (n < 0) {
 				/* shutdown of the socket at client side */
 				return -2;
@@ -8771,11 +8766,7 @@ read_auth_file(struct mg_file *filep,
 			switch (workdata->ah.type) {
 			case 1: /* Basic */
 			{
-				size_t mlen = strlen(workdata->f_user)
-				              + strlen(workdata->domain)
-				              + strlen(workdata->ah.plain_password) + 3;
 				char md5[33];
-
 				mg_md5(md5,
 				       workdata->f_user,
 				       ":",
@@ -22357,7 +22348,7 @@ mg_init_library(unsigned features)
 				len += 2;
 			}
 		}
-		all_methods = mg_malloc(len);
+		all_methods = (char *)mg_malloc(len);
 		if (!all_methods) {
 			/* Must never happen */
 			mg_global_unlock();
