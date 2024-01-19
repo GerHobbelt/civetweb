@@ -12143,17 +12143,15 @@ dav_mkcol(struct mg_connection *conn, const char *path)
 		mg_response_header_send(conn);
 	} else {
 		int http_status = 500;
-		switch (errno) {
-		case EEXIST:
+
+		if(errno == EEXIST)
 			http_status = 405;
-			break;
-		case EACCES:
-			http_status = 403;
-			break;
-		case ENOENT:
-			http_status = 409;
-			break;
-		}
+      else
+         if(errno == EACCES)
+	  		   http_status = 403;
+         else
+            if(errno == ENOENT)
+			      http_status = 409;
 
 		mg_send_http_error(conn,
 		                   http_status,
@@ -12307,17 +12305,14 @@ dav_move_file(struct mg_connection *conn, const char *path, int do_copy)
 
 		rc = rename(path, dest_path);
 		if (rc) {
-			switch (errno) {
-			case EEXIST:
-				http_status = 412;
-				break;
-			case EACCES:
-				http_status = 403;
-				break;
-			case ENOENT:
-				http_status = 409;
-				break;
-			}
+         if(errno == EEXIST)
+            http_status = 412;
+         else
+            if(errno == EACCES)
+               http_status = 403;
+            else
+               if(errno == ENOENT)
+                  http_status = 409;
 		}
 	}
 #endif
