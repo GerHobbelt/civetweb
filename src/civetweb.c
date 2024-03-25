@@ -2425,6 +2425,7 @@ struct mg_context {
 
 	/* Thread related */
 	stop_flag_t stop_flag;        /* Should we stop event loop */
+        int in_use;
 	pthread_mutex_t thread_mutex; /* Protects client_socks or queue */
         volatile ptrdiff_t cur_tmp_workers; /* current temporary worker threads */
         volatile unsigned int t_pending_count;
@@ -20734,6 +20735,40 @@ free_context(struct mg_context *ctx)
         // mg_exit_library();
 }
 
+void
+mg_force_free_ctx_resource(struct mg_context *ctx)
+{
+       // fprintf(stderr,"%s() Entry pid=%d ctx=%p \n",__func__,getpid(),ctx);
+	if (!ctx) {
+	   return;
+	}
+
+	mg_global_lock();
+	//NOTE: ctx->in_use is set to 1 in mg_start2 where ctx was created
+	// protect mg_force_free_ctx_resource() being called from multiple contex.
+	if (!ctx->in_use) {
+	   mg_global_unlock();
+	   return ;
+	}
+	else {
+	  ctx->in_use = 0;
+	}
+	mg_global_unlock();
+
+        // mg_close_stop_ctx(&ctx->listen_stop);
+        // free_context already calls mg_close_stop_ctx()
+
+	close_all_listening_sockets(ctx);
+
+#if defined(USE_TIMERS)
+	timers_exit(ctx);
+#endif
+
+	/* Free memory */
+       
+	free_context(ctx);
+        // fprintf(stderr,"%s() Leave pid=%d ctx=%p \n",__func__,getpid(),ctx);
+}
 
 void
 mg_stop(struct mg_context *ctx)
@@ -20744,6 +20779,18 @@ mg_stop(struct mg_context *ctx)
 	if (!ctx) {
 		return;
 	}
+
+	mg_global_lock();
+          //NOTE: ctx->in_use is set to 1 in mg_start2 where ctx was created
+         // protect mg_stop() being called from multiple contex.
+         if (!ctx->in_use) {
+	    mg_global_unlock();
+            return ;
+         }
+         else {
+           ctx->in_use = 0;
+         }
+	mg_global_unlock();
 
 	/* We don't use a lock here. Calling mg_stop with the same ctx from
 	 * two threads is not allowed. */
@@ -20946,6 +20993,8 @@ mg_start2(struct mg_init_data *init, struct mg_error_data *error)
 		}
 		return NULL;
 	}
+
+        ctx->in_use = 1;
 
 	/* Random number generator will initialize at the first call */
 	ctx->dd.auth_nonce_mask =

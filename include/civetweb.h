@@ -466,6 +466,8 @@ CIVETWEB_API struct mg_context *mg_start(const struct mg_callbacks *callbacks,
    threads are stopped. Context pointer becomes invalid. */
 CIVETWEB_API void mg_stop(struct mg_context *);
 
+CIVETWEB_API void mg_force_free_ctx_resource(struct mg_context *ctx);
+
 
 /* Add an additional domain to an already running web server.
  *
