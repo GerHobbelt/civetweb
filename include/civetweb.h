@@ -143,6 +143,9 @@ CIVETWEB_API unsigned mg_init_library(unsigned features);
  */
 CIVETWEB_API unsigned mg_exit_library(void);
 
+// does some extra cleaning of ssl context
+CIVETWEB_API unsigned mg_force_exit_library(void);
+
 
 struct mg_context;    /* Handle for the HTTP service itself */
 struct mg_connection; /* Handle for the individual connection */
