@@ -17666,48 +17666,6 @@ init_ssl_ctx(struct mg_context *phys_ctx, struct mg_domain_context *dom_ctx)
 	return init_ssl_ctx_impl(phys_ctx, dom_ctx, pem, chain);
 }
 
-static void
-uninitialize_cleanup_free_openssl(void)
-{
-#if defined(OPENSSL_API_1_1) || defined(OPENSSL_API_3_0)
-
-	if (mg_atomic_dec(&cryptolib_users) == 0) {
-
-		/* Shutdown according to
-		 * https://wiki.openssl.org/index.php/Library_Initialization#Cleanup
-		 * http://stackoverflow.com/questions/29845527/how-to-properly-uninitialize-openssl
-		 */
-                // fprintf(stderr,"%s() OPENSSL_cleanup() pid=%d\n",__func__,getpid());
-                OPENSSL_cleanup();
-                CONF_modules_free();
-                CONF_modules_finish();
-		CONF_modules_unload(1);
-#else
-	int i;
-
-	if (mg_atomic_dec(&cryptolib_users) == 0) {
-
-		/* Shutdown according to
-		 * https://wiki.openssl.org/index.php/Library_Initialization#Cleanup
-		 * http://stackoverflow.com/questions/29845527/how-to-properly-uninitialize-openssl
-		 */
-		CRYPTO_set_locking_callback(NULL);
-		CRYPTO_set_id_callback(NULL);
-		ENGINE_cleanup();
-		CONF_modules_unload(1);
-		ERR_free_strings();
-		EVP_cleanup();
-		CRYPTO_cleanup_all_ex_data();
-		OPENSSL_REMOVE_THREAD_STATE();
-
-		for (i = 0; i < CRYPTO_num_locks(); i++) {
-			pthread_mutex_destroy(&ssl_mutexes[i]);
-		}
-		mg_free(ssl_mutexes);
-		ssl_mutexes = NULL;
-#endif /* OPENSSL_API_1_1 || OPENSSL_API_3_0 */
-	}
-}
 
 static void
 uninitialize_openssl(void)
@@ -22836,46 +22794,6 @@ mg_init_library(unsigned features)
 	return features_inited;
 }
 
-/* Un-initialize this library. */
-unsigned
-mg_force_exit_library(void)
-{
-	if (mg_init_library_called <= 0) {
-		return 0;
-	}
-
-	mg_global_lock();
-
-	mg_init_library_called--;
-	if (mg_init_library_called == 0) {
-#if (defined(OPENSSL_API_1_0) || defined(OPENSSL_API_1_1)) && !defined(NO_SSL)
-		if (mg_openssl_initialized) {
-                        uninitialize_cleanup_free_openssl();
-			mg_openssl_initialized = 0;
-		}
-#endif
-
-#if defined(_WIN32)
-		(void)WSACleanup();
-		(void)pthread_mutex_destroy(&global_log_file_lock);
-#else
-		(void)pthread_mutexattr_destroy(&pthread_mutex_attr);
-#endif
-
-		(void)pthread_key_delete(sTlsKey);
-
-#if defined(USE_LUA)
-		lua_exit_optional_libraries();
-#endif
-
-		mg_global_unlock();
-		(void)pthread_mutex_destroy(&global_lock_mutex);
-		return 1;
-	}
-
-	mg_global_unlock();
-	return 1;
-}
 
 /* Un-initialize this library. */
 unsigned
