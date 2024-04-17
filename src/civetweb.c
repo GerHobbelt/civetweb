@@ -6961,6 +6961,141 @@ void mg_set_partial_rx(struct mg_connection *conn, int msec, unsigned int bytes)
 	conn->rx_partial_bytes = bytes ;
 }
 
+
+// IMPORTANT: mg_read_chunk() is fully based on mg_read() and hence whenever mg_read is
+// changed, review mg_read_chunk() and incorporate changes appropriately that suits
+// mg_read_chunk() as well.
+
+// when doing mg_read_chunk for chunk, will return immediately when a chunk is read.
+// please allocate a big buffer, otherwise.
+int
+mg_read_chunk(struct mg_connection *conn, void *buf, size_t len)
+{
+	int rc  = 0 ;
+	if (len > INT_MAX) {
+		len = INT_MAX;
+	}
+
+	if (conn == NULL) {
+		return 0;
+	}
+
+	if (conn->is_chunked) {
+		size_t all_read = 0;
+
+		while (len > 0) {
+			if (conn->is_chunked >= 3) {
+				/* No more data left to read */
+				return 0;
+			}
+			if (conn->is_chunked != 1) {
+				/* Has error */
+				return -1;
+			}
+
+			if (conn->consumed_content != conn->content_len) {
+				// printf("***** conn->consumed_content: %lld, conn->content_len: %lld\n",
+				// 	conn->consumed_content, conn->content_len);
+				/* copy from the current chunk */
+				int read_ret = mg_read_inner(conn, (char *)buf + all_read, len);
+
+				if (read_ret < 1) {
+					/* read error */
+					conn->is_chunked = 2;
+					return -1;
+				}
+
+				all_read += (size_t)read_ret;
+				len -= (size_t)read_ret;
+
+				if (conn->consumed_content == conn->content_len) {
+					/* Add data bytes in the current chunk have been read,
+					 * so we are expecting \r\n now. */
+					char x[2];
+					conn->content_len += 2;
+					if ((mg_read_inner(conn, x, 2) != 2) || (x[0] != '\r')
+					    || (x[1] != '\n')) {
+						/* Protocol violation */
+						conn->is_chunked = 2;
+						return -1;
+					}
+
+					/** added by jeremy */
+					return all_read;
+				}
+			} else {
+				// printf("***** fetch new chunk\n");
+				/* fetch a new chunk */
+				size_t i;
+				char lenbuf[64];
+				char *end = NULL;
+				unsigned long chunkSize = 0;
+
+				for (i = 0; i < (sizeof(lenbuf) - 1); i++) {
+					conn->content_len++;
+					if (mg_read_inner(conn, lenbuf + i, 1) != 1) {
+						lenbuf[i] = 0;
+					}
+					if ((i > 0) && (lenbuf[i] == '\r')
+					    && (lenbuf[i - 1] != '\r')) {
+						continue;
+					}
+					if ((i > 1) && (lenbuf[i] == '\n')
+					    && (lenbuf[i - 1] == '\r')) {
+						lenbuf[i + 1] = 0;
+						chunkSize = strtoul(lenbuf, &end, 16);
+						if (chunkSize == 0) {
+							/* regular end of content */
+							conn->is_chunked = 3;
+						}
+						break;
+					}
+					if (!isxdigit((unsigned char)lenbuf[i])) {
+						/* illegal character for chunk length */
+						conn->is_chunked = 2;
+						return -1;
+					}
+				}
+				if ((end == NULL) || (*end != '\r')) {
+					/* chunksize not set correctly */
+					conn->is_chunked = 2;
+					return -1;
+				}
+				if (chunkSize == 0) {
+					/* try discarding trailer for keep-alive */
+					conn->content_len += 2;
+					if ((mg_read_inner(conn, lenbuf, 2) == 2)
+					    && (lenbuf[0] == '\r') && (lenbuf[1] == '\n')) {
+						conn->is_chunked = 4;
+					}
+					break;
+				}
+
+				/* append a new chunk */
+				conn->content_len += (int64_t)chunkSize;
+			}
+		}
+
+		return (int)all_read;
+	}
+
+	if(conn->rx_time == 0) {
+		conn->rx_time = time(NULL);
+	}
+
+	rc = mg_read_inner(conn, buf, len);
+	if ((rc == 0) && (conn->if_err > 0)) {
+		//set rc to -1 on if_err
+		rc = -1 ;
+	}
+
+	if (rc > 0) {
+		conn->rx_time = time(NULL);
+	}
+	return rc ;
+}
+
+
 int
 mg_read(struct mg_connection *conn, void *buf, size_t len)
 {

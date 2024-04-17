@@ -1075,6 +1075,15 @@ CIVETWEB_API long long mg_store_body(struct mg_connection *conn,
 */
 
 
+/* IMPORTANT: mg_read_chunk() is fully based on mg_read() and hence whenever mg_read is
+   changed, review mg_read_chunk() and incorporate changes appropriately that suits
+   mg_read_chunk() as well.
+
+   when doing mg_read_chunk for chunk, will return immediately when a chunk is read.
+   please allocate a big buffer, otherwise.
+*/
+CIVETWEB_API int mg_read_chunk(struct mg_connection *conn, void *buf, size_t len);
+
 /* Read data from the remote end, return number of bytes read.
    Return:
      0     connection has been closed by peer. No more data could be read.
