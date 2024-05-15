@@ -16698,6 +16698,10 @@ sslize(struct mg_connection *conn,
 		return 0;
 	}
 	SSL_set_app_data(conn->ssl, (char *)conn);
+	
+	// Enable SNI 
+	SSL_set_tlsext_host_name(conn->ssl, client_options->host);
+	//
 
 	ret = SSL_set_fd(conn->ssl, conn->client.sock);
 	if (ret != 1) {
