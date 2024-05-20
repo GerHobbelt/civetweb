@@ -8406,6 +8406,7 @@ static const struct {
     {".pdf", 4, "application/pdf"},
     {".ps", 3, "application/postscript"},
     {".rtf", 4, "application/rtf"},
+    {".wasm", 5, "application/wasm"},
     {".xhtml", 6, "application/xhtml+xml"},
     {".xsl", 4, "application/xml"},
     {".xslt", 5, "application/xml"},
@@ -15859,9 +15860,10 @@ parse_port_string(const struct vec *vec, struct socket *so, int *ip_version)
 	 * 'r' */
 	if ((len > 0) && (is_valid_port(port))) {
 		int bad_suffix = 0;
+		size_t i;
 
 		/* Parse any suffix character(s) after the port number */
-		for (size_t i = len; i < vec->len; i++) {
+		for (i = len; i < vec->len; i++) {
 			unsigned char *opt = NULL;
 			switch (vec->ptr[i]) {
 			case 'o':
@@ -19242,6 +19244,24 @@ websocket_client_thread(void *data)
 #endif
 
 
+#if defined(USE_WEBSOCKET)
+static void
+generate_websocket_magic(char *magic25)
+{
+	uint64_t rnd;
+	unsigned char buffer[2 * sizeof(rnd)];
+
+	rnd = get_random();
+	memcpy(buffer, &rnd, sizeof(rnd));
+	rnd = get_random();
+	memcpy(buffer + sizeof(rnd), &rnd, sizeof(rnd));
+
+	size_t dst_len = 24 + 1;
+	mg_base64_encode(buffer, sizeof(buffer), magic25, &dst_len);
+}
+#endif
+
+
 static struct mg_connection *
 mg_connect_websocket_client_impl(const struct mg_client_options *client_options,
                                  int use_ssl,
@@ -19258,7 +19278,8 @@ mg_connect_websocket_client_impl(const struct mg_client_options *client_options,
 
 #if defined(USE_WEBSOCKET)
 	struct websocket_client_thread_data *thread_data;
-	static const char *magic = "x3JJHMbDL1EzLkh9GBhXDw==";
+	char magic[32];
+	generate_websocket_magic(magic);
 
 	const char *host = client_options->host;
 	int i;
