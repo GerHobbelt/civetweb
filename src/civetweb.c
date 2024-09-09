@@ -6678,6 +6678,10 @@ pull_inner(FILE *fp,
 
 	if ((nread > 0) || ((nread == 0) && (len == 0))) {
 		/* some data has been read, or no data was requested */
+                if (conn && (nread > 2)) {
+                  conn->rx_time = time(NULL);
+                  // fprintf(stderr,"%s() conn=%p New Updated rx_time=%lu nread=%d \n",__func__,conn,conn->rx_time,nread);
+                }
 		return nread;
 	}
 
