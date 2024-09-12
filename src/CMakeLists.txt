@@ -316,10 +316,9 @@ if (CIVETWEB_ENABLE_CXX)
   target_include_directories(
     civetweb-cpp PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
-  target_link_libraries(civetweb-cpp PUBLIC civetweb-c-library)
   install(
     TARGETS civetweb-cpp
-    EXPORT "${TARGETS_EXPORT_NAME}"
+    EXPORT ${PROJECT_NAME}-targets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}

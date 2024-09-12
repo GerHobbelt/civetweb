@@ -83,7 +83,7 @@ option(CIVETWEB_DISABLE_CACHING "Disables caching, so that no timegm is used." O
 message(STATUS "Disable caching support - ${CIVETWEB_DISABLE_CACHING}")
 
 # C++ wrappers
-option(CIVETWEB_ENABLE_CXX "Enables the C++ wrapper library" OFF)
+option(CIVETWEB_ENABLE_CXX "Enables the C++ wrapper library" ON)
 message(STATUS "C++ wrappers - ${CIVETWEB_ENABLE_CXX}")
 
 # IP Version 6
