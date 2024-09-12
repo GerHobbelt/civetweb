@@ -562,65 +562,48 @@ if (CIVETWEB_BUILD_TESTING)
   add_subdirectory(unittest)
 endif()
 
-# cmake config file
+# Installation (https://github.com/forexample/package-example) {
+
+set(config_install_dir "lib/cmake/${PROJECT_NAME}")
+set(include_install_dir "include")
+
+set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
+set(version_config "${generated_dir}/${PROJECT_NAME}ConfigVersion.cmake")
+set(project_config "${generated_dir}/${PROJECT_NAME}Config.cmake")
+set(TARGETS_EXPORT_NAME "${PROJECT_NAME}-targets")
+set(namespace "${PROJECT_NAME}::")
 
 include(CMakePackageConfigHelpers)
 
-install(
-  EXPORT ${PROJECT_NAME}-targets
-  NAMESPACE ${PROJECT_NAME}::
-  FILE ${PROJECT_NAME}-targets.cmake
-  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
-  COMPONENT civetweb-cmake-config
+write_basic_package_version_file(
+    "${version_config}"
+    VERSION ${CIVETWEB_VERSION}
+    COMPATIBILITY SameMajorVersion
 )
 
+# Use variables:
+#   * TARGETS_EXPORT_NAME
+#   * PROJECT_NAME
 configure_package_config_file(
-  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/${PROJECT_NAME}-config.cmake.in"
-  ${PROJECT_NAME}-config.cmake
-  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
-  NO_CHECK_REQUIRED_COMPONENTS_MACRO
-  PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_LIBDIR CIVETWEB_ENABLE_CXX
-)
-
-configure_file(
-  cmake/${PROJECT_NAME}.pc.in
-  ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.pc
-  @ONLY
-)
-
-configure_file(
-  cmake/${PROJECT_NAME}-cpp.pc.in
-  ${PROJECT_BINARY_DIR}/${PROJECT_NAME}-cpp.pc
-  @ONLY
+    "cmake/Config.cmake.in"
+    "${project_config}"
+    INSTALL_DESTINATION "${config_install_dir}"
 )
 
 install(
-  FILES 
-    "${PROJECT_BINARY_DIR}/${PROJECT_NAME}.pc"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/pkgconfig"
+    FILES "${project_config}" "${version_config}"
+    DESTINATION "${config_install_dir}"
 )
 
 install(
-  FILES 
-    "${PROJECT_BINARY_DIR}/${PROJECT_NAME}-cpp.pc"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/pkgconfig"
+    EXPORT "${TARGETS_EXPORT_NAME}"
+    NAMESPACE "${namespace}"
+    FILE ${TARGETS_EXPORT_NAME}.cmake
+    DESTINATION "${config_install_dir}"
 )
 
-write_basic_package_version_file(${PROJECT_NAME}-config-version.cmake
-  VERSION ${CIVETWEB_VERSION}
-  COMPATIBILITY AnyNewerVersion
-)
-
-install(
-  FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake"
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindLibDl.cmake"
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindLibRt.cmake"
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindWinSock.cmake"
-  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
-  COMPONENT civetweb-cmake-config
-)
+# }
 
 # Set up CPack
 include(InstallRequiredSystemLibraries)
