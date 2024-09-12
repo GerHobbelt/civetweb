@@ -4,6 +4,12 @@ cmake_policy(VERSION 3.2.2)
 cmake_policy(SET CMP0054 NEW)
 cmake_policy(SET CMP0057 NEW)
 
+include("cmake/HunterGate.cmake")
+HunterGate(
+    URL "https://github.com/ruslo/hunter/archive/v0.19.194.tar.gz"
+    SHA1 "6551bda6756109032d943d96f6f2f71e815ef64c"
+)
+
 # Set up the project
 project (civetweb)
 
@@ -20,12 +26,6 @@ elseif(NOT BSD AND ${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")
 elseif(NOT LINUX AND ${CMAKE_SYSTEM_NAME} MATCHES "Linux")
     SET(LINUX YES)
 endif()
-
-include("cmake/HunterGate.cmake")
-HunterGate(
-    URL "https://github.com/ruslo/hunter/archive/v0.19.194.tar.gz"
-    SHA1 "6551bda6756109032d943d96f6f2f71e815ef64c"
-)
 
 # Do not allow in source builds
 set(CMAKE_DISABLE_SOURCE_CHANGES ON)
@@ -536,48 +536,6 @@ endif()
 if (ZEPHYR)
   return()
 endif()
-
-# Installation (https://github.com/forexample/package-example) {
-
-set(config_install_dir "lib/cmake/${PROJECT_NAME}")
-set(include_install_dir "include")
-
-set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
-
-set(version_config "${generated_dir}/${PROJECT_NAME}ConfigVersion.cmake")
-set(project_config "${generated_dir}/${PROJECT_NAME}Config.cmake")
-set(TARGETS_EXPORT_NAME "${PROJECT_NAME}Targets")
-set(namespace "${PROJECT_NAME}::")
-
-include(CMakePackageConfigHelpers)
-
-write_basic_package_version_file(
-    "${version_config}"
-    VERSION ${CIVETWEB_VERSION}
-    COMPATIBILITY SameMajorVersion
-)
-
-# Use variables:
-#   * TARGETS_EXPORT_NAME
-#   * PROJECT_NAME
-configure_package_config_file(
-    "cmake/Config.cmake.in"
-    "${project_config}"
-    INSTALL_DESTINATION "${config_install_dir}"
-)
-
-install(
-    FILES "${project_config}" "${version_config}"
-    DESTINATION "${config_install_dir}"
-)
-
-install(
-    EXPORT "${TARGETS_EXPORT_NAME}"
-    NAMESPACE "${namespace}"
-    DESTINATION "${config_install_dir}"
-)
-
-# }
 
 # Build the targets
 add_subdirectory(src)

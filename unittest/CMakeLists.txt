@@ -61,6 +61,9 @@ if (LIBRT_FOUND)
   set(CHECK_LIBRARIES "${CHECK_LIBRARIES};LIBRT::LIBRT")
 endif()
 
+hunter_add_package(md5)
+find_package(md5 CONFIG REQUIRED)
+
 # Build the C unit tests
 add_library(shared-c-unit-tests STATIC shared.c)
 target_include_directories(
@@ -92,6 +95,7 @@ target_include_directories(
   private-c-unit-tests PUBLIC
   ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(private-c-unit-tests ${CHECK_LIBRARIES})
+target_link_libraries(private-c-unit-tests md5::md5)
 add_dependencies(private-c-unit-tests check-unit-test-framework)
 
 add_library(timer-c-unit-tests STATIC timertest.c)
@@ -99,6 +103,7 @@ target_include_directories(
   timer-c-unit-tests PUBLIC
   ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(timer-c-unit-tests ${CHECK_LIBRARIES})
+target_link_libraries(timer-c-unit-tests md5::md5)
 add_dependencies(timer-c-unit-tests check-unit-test-framework)
 
 add_library(exe-c-unit-tests STATIC private_exe.c)
@@ -109,6 +114,7 @@ target_include_directories(
   exe-c-unit-tests PUBLIC
   ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(exe-c-unit-tests civetweb-c-library ${CHECK_LIBRARIES})
+target_link_libraries(exe-c-unit-tests md5::md5)
 add_dependencies(exe-c-unit-tests check-unit-test-framework)
 
 add_executable(main-c-unit-test main.c)
