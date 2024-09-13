@@ -1,13 +1,17 @@
 @PACKAGE_INIT@
 
+include(hunter_add_package)
+
 # Copy-paste from src/CMakeLists.txt {
 
+hunter_add_package(md5)
 find_package(md5 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 
 if("@CIVETWEB_ENABLE_SSL@")
   if("@CIVETWEB_ENABLE_SSL_DYNAMIC_LOADING@")
   else()
+    hunter_add_package(OpenSSL)
     find_package(OpenSSL REQUIRED)
   endif()
 endif()
