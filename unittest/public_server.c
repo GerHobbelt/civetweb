@@ -328,6 +328,12 @@ test_mg_start(const struct mg_callbacks *callbacks,
 {
 	struct mg_context *ctx;
 	struct mg_callbacks cb;
+	struct mg_init_data init;
+	struct mg_error_data error;
+	char error_buffer[256];
+
+	memset(&init, 0, sizeof(init));
+	memset(&error, 0, sizeof(error));
 
 	if (callbacks) {
 		memcpy(&cb, callbacks, sizeof(cb));
@@ -339,21 +345,33 @@ test_mg_start(const struct mg_callbacks *callbacks,
 		cb.log_message = test_log_message;
 	}
 
+	init.callbacks = &cb;
+	init.user_data = user_data;
+	init.configuration_options = configuration_options;
+
+	error.text = error_buffer;
+	error.text_buffer_size = sizeof(error_buffer);
+
 	mark_point();
 	test_sleep(SLEEP_BEFORE_MG_START);
 	mark_point();
-	ctx = mg_start(&cb, user_data, configuration_options);
+	ctx = mg_start2(&init, &error);
 	mark_point();
 	if (ctx) {
 		/* Give the server some time to start in the test VM. */
 		/* Don't need to do this if mg_start failed. */
 		test_sleep(SLEEP_AFTER_MG_START);
+		ck_assert_uint_eq(error.code, 0);
+		ck_assert_str_eq(error.text, "");
 	} else if (line > 0) {
 		/* mg_start is not supposed to fail anywhere, except for
 		 * special tests (for them, line is 0). */
-		ck_abort_msg("mg_start failed in line %u, message %s",
-		             line,
-		             (lastMessage ? lastMessage : "<NULL>"));
+		ck_abort_msg(
+		    "mg_start failed in line %u\nerror %u: %s\nlast message %s\n",
+		    line,
+		    error.code,
+		    error.text,
+		    (lastMessage ? lastMessage : "<NULL>"));
 	}
 	mark_point();
 
@@ -365,7 +383,7 @@ static void
 test_mg_stop(struct mg_context *ctx, unsigned line)
 {
 	(void)line;
-#ifdef __MACH__
+#if defined(__MACH__) && defined(__APPLE__)
 	/* For unknown reasons, there are sporadic hangs
 	 * for OSX if mark_point is called here */
 	test_sleep(SLEEP_BEFORE_MG_STOP);
@@ -391,11 +409,6 @@ test_mg_start_stop_http_server_impl(int ipv6, int bound)
 	int optcnt = 0;
 	const char *localhost_name = ((ipv6) ? "[::1]" : "127.0.0.1");
 
-#if defined(MG_LEGACY_INTERFACE)
-	size_t ports_cnt;
-	int ports[16];
-	int ssl[16];
-#endif
 	struct mg_callbacks callbacks;
 	char errmsg[256];
 
@@ -427,10 +440,6 @@ test_mg_start_stop_http_server_impl(int ipv6, int bound)
 
 	OPTIONS[optcnt] = 0;
 
-#if defined(MG_LEGACY_INTERFACE)
-	memset(ports, 0, sizeof(ports));
-	memset(ssl, 0, sizeof(ssl));
-#endif
 	memset(portinfo, 0, sizeof(portinfo));
 	memset(&callbacks, 0, sizeof(callbacks));
 	memset(errmsg, 0, sizeof(errmsg));
@@ -441,15 +450,6 @@ test_mg_start_stop_http_server_impl(int ipv6, int bound)
 
 	ck_assert_str_eq(errmsg, "");
 	ck_assert(ctx != NULL);
-
-#if defined(MG_LEGACY_INTERFACE)
-	ports_cnt = mg_get_ports(ctx, 16, ports, ssl);
-	ck_assert_uint_eq(ports_cnt, 1);
-	ck_assert_int_eq(ports[0], 8080);
-	ck_assert_int_eq(ssl[0], 0);
-	ck_assert_int_eq(ports[1], 0);
-	ck_assert_int_eq(ssl[1], 0);
-#endif
 
 	ret = mg_get_server_ports(ctx, 0, portinfo);
 	ck_assert_int_lt(ret, 0);
@@ -628,11 +628,6 @@ START_TEST(test_mg_start_stop_https_server)
 
 	struct mg_context *ctx;
 
-#if defined(MG_LEGACY_INTERFACE)
-	size_t ports_cnt;
-	int ports[16];
-	int ssl[16];
-#endif
 	struct mg_callbacks callbacks;
 	char errmsg[256];
 
@@ -662,10 +657,6 @@ START_TEST(test_mg_start_stop_https_server)
 	ck_assert(OPTIONS[sizeof(OPTIONS) / sizeof(OPTIONS[0]) - 1] == NULL);
 	ck_assert(OPTIONS[sizeof(OPTIONS) / sizeof(OPTIONS[0]) - 2] == NULL);
 
-#if defined(MG_LEGACY_INTERFACE)
-	memset(ports, 0, sizeof(ports));
-	memset(ssl, 0, sizeof(ssl));
-#endif
 	memset(portinfo, 0, sizeof(portinfo));
 	memset(&callbacks, 0, sizeof(callbacks));
 	memset(errmsg, 0, sizeof(errmsg));
@@ -676,17 +667,6 @@ START_TEST(test_mg_start_stop_https_server)
 
 	ck_assert_str_eq(errmsg, "");
 	ck_assert(ctx != NULL);
-
-#if defined(MG_LEGACY_INTERFACE)
-	ports_cnt = mg_get_ports(ctx, 16, ports, ssl);
-	ck_assert_uint_eq(ports_cnt, 2);
-	ck_assert_int_eq(ports[0], 8080);
-	ck_assert_int_eq(ssl[0], 0);
-	ck_assert_int_eq(ports[1], 8443);
-	ck_assert_int_eq(ssl[1], 1);
-	ck_assert_int_eq(ports[2], 0);
-	ck_assert_int_eq(ssl[2], 0);
-#endif
 
 	ret = mg_get_server_ports(ctx, 0, portinfo);
 	ck_assert_int_lt(ret, 0);
@@ -1161,14 +1141,14 @@ websock_server_data(struct mg_connection *conn,
 	}
 	mark_point();
 
-	return 1; /* return 1 to keep the connetion open */
+	return 1; /* return 1 to keep the connection open */
 }
 
 
 static void
 websock_server_close(const struct mg_connection *conn, void *udata)
 {
-#ifndef __MACH__
+#if !defined(__MACH__) && !defined(__APPLE__)
 	ck_assert_ptr_eq((void *)udata, (void *)(ptrdiff_t)7531);
 	WS_TEST_TRACE("Server: Close connection\n");
 
@@ -1245,7 +1225,7 @@ websocket_client_close_handler(const struct mg_connection *conn,
 	struct tclient_data *pclient_data =
 	    (struct tclient_data *)mg_get_user_data(ctx);
 
-#ifndef __MACH__
+#if !defined(__MACH__) && !defined(__APPLE__)
 	ck_assert_ptr_eq(user_data, (void *)pclient_data);
 
 	ck_assert(pclient_data != NULL);
@@ -1259,7 +1239,7 @@ websocket_client_close_handler(const struct mg_connection *conn,
 	(void)user_data;
 	pclient_data->closed++;
 
-#endif /* __MACH__ */
+#endif /* __MACH__ && __APPLE__ */
 }
 
 #endif /* USE_WEBSOCKET */
@@ -1821,9 +1801,9 @@ START_TEST(test_request_handlers)
 #else
 	ck_assert_int_eq(client_ri->status_code, 200);
 	i = mg_read(client_conn, buf, sizeof(buf));
-	ck_assert(i > 6);
-	buf[6] = 0;
-	ck_assert_str_eq(buf, "<html>");
+	ck_assert(i > 21);
+	buf[21] = 0;
+	ck_assert_str_eq(buf, "<!DOCTYPE html><html>");
 #endif
 	mg_close_connection(client_conn);
 
@@ -1862,10 +1842,21 @@ START_TEST(test_request_handlers)
 	client_ri = mg_get_response_info(client_conn);
 
 	ck_assert(client_ri != NULL);
+	/* Result must be an error code*/
+	ck_assert_int_gt(client_ri->status_code, 400);
+	ck_assert_int_lt(client_ri->status_code, 500);
+
 #if defined(NO_FILES)
+	/* In case there is no filesystem, PUT is not a valid method */
 	ck_assert_int_eq(client_ri->status_code, 405); /* method not allowed */
 #else
-	ck_assert_int_eq(client_ri->status_code, 401); /* not authorized */
+	/* In case there is a filesystem but no auth file is provided,
+	 * PUT is not a valid method */
+	if (client_ri->status_code != 405) {
+		/* 401: It would be possible in principle, but there client needs
+		 * to send authentication data */
+		ck_assert_int_eq(client_ri->status_code, 401); /* not authorized */
+	}
 #endif
 	mg_close_connection(client_conn);
 
@@ -2618,6 +2609,36 @@ FormGet(struct mg_connection *conn, void *cbdata)
 
 
 static int
+FormError(struct mg_connection *conn, void *cbdata)
+{
+	const struct mg_request_info *req_info = mg_get_request_info(conn);
+	int ret;
+	struct mg_form_data_handler fdh = {NULL, NULL, NULL, NULL};
+
+	(void)cbdata;
+
+	ck_assert(req_info != NULL);
+
+	mg_printf(conn, "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n");
+	fdh.user_data = (void *)&g_field_found_return;
+
+	/* Call the form handler */
+	g_field_step = 0;
+	g_field_found_return = MG_FORM_FIELD_STORAGE_GET;
+	ret = mg_handle_form_request(conn, &fdh);
+	g_field_found_return = -888;
+	ck_assert_int_eq(ret, -1);
+	ck_assert_int_eq(g_field_step, 0);
+	mg_printf(conn, "%i\r\n", ret);
+	g_field_step = 1000;
+
+	mark_point();
+
+	return 1;
+}
+
+
+static int
 FormStore(struct mg_connection *conn,
           void *cbdata,
           int ret_expected,
@@ -2736,6 +2757,7 @@ START_TEST(test_handle_form)
 	ck_assert_str_eq(opt, "8884");
 
 	mg_set_request_handler(ctx, "/handle_form", FormGet, NULL);
+	mg_set_request_handler(ctx, "/handle_form_error", FormError, NULL);
 	mg_set_request_handler(ctx, "/handle_form_store", FormStore1, NULL);
 	mg_set_request_handler(ctx, "/handle_form_store2", FormStore2, NULL);
 
@@ -2805,6 +2827,23 @@ START_TEST(test_handle_form)
 	ck_assert(client_ri != NULL);
 	ck_assert_int_eq(client_ri->status_code, 200);
 	mg_close_connection(client_conn);
+
+	/*
+	 * https://datatracker.ietf.org/doc/html/rfc2046#section-5.1
+	 *
+	 * multipart-body := [preamble CRLF]
+	 *     dash-boundary transport-padding CRLF
+	 *     body-part *encapsulation
+	 *     close-delimiter transport-padding
+	 *     [CRLF epilogue]
+	 *
+	 * preamble := discard-text
+	 * epilogue := discard-text
+	 *
+	 * discard-text := *(*text CRLF) *text
+	 *
+	 * text := <any CHAR, including bare CR & bare LF, but NOT including CRLF>
+	 */
 
 	/* Handle form: "POST multipart/form-data" */
 	multipart_body =
@@ -2933,6 +2972,7 @@ START_TEST(test_handle_form)
 
 
 	/* Handle form: "POST multipart/form-data" with chunked transfer encoding */
+	/* use the most universal possible (no edge cases) body*/
 	client_conn =
 	    mg_download("localhost",
 	                8884,
@@ -3025,6 +3065,787 @@ START_TEST(test_handle_form)
 	ck_assert_int_eq(client_ri->status_code, 200);
 	mg_close_connection(client_conn);
 
+	/* Handle form: "POST multipart/form-data" without trailing CRLF*/
+	multipart_body =
+		"--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"textin\"\r\n"
+	    "\r\n"
+	    "text\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"passwordin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"radio1\"\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=radio2\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"check1\"\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"numberin\"\r\n"
+	    "\r\n"
+	    "1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datein\"\r\n"
+	    "\r\n"
+	    "1.1.2016\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"colorin\"\r\n"
+	    "\r\n"
+	    "#80ff00\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"rangein\"\r\n"
+	    "\r\n"
+	    "3\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"monthin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"weekin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"timein\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datetimen\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datetimelocalin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"emailin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"searchin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"telin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"urlin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"filein\"; filename=\"\"\r\n"
+	    "Content-Type: application/octet-stream\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=filesin; filename=\r\n"
+	    "Content-Type: application/octet-stream\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"selectin\"\r\n"
+	    "\r\n"
+	    "opt1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"message\"\r\n"
+	    "\r\n"
+	    "Text area default text.\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388--";
+	body_len = strlen(multipart_body);
+	ck_assert_uint_eq(body_len, 2366); /* not required */
+
+	client_conn =
+	    mg_download("localhost",
+	                8884,
+	                0,
+	                ebuf,
+	                sizeof(ebuf),
+	                "POST /handle_form HTTP/1.1\r\n"
+	                "Host: localhost:8884\r\n"
+	                "Connection: close\r\n"
+	                "Content-Type: multipart/form-data; "
+	                "boundary=multipart-form-data-boundary--see-RFC-2388\r\n"
+	                "Content-Length: %u\r\n"
+	                "\r\n%s",
+	                (unsigned int)body_len,
+	                multipart_body);
+
+	ck_assert(client_conn != NULL);
+	for (sleep_cnt = 0; sleep_cnt < 30; sleep_cnt++) {
+		test_sleep(1);
+		if (g_field_step == 1000) {
+			break;
+		}
+	}
+	client_ri = mg_get_response_info(client_conn);
+
+	ck_assert(client_ri != NULL);
+	ck_assert_int_eq(client_ri->status_code, 200);
+	mg_close_connection(client_conn);
+
+	/* Handle form: "POST multipart/form-data" with epilogue*/
+	multipart_body =
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"textin\"\r\n"
+	    "\r\n"
+	    "text\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"passwordin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"radio1\"\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=radio2\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"check1\"\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"numberin\"\r\n"
+	    "\r\n"
+	    "1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datein\"\r\n"
+	    "\r\n"
+	    "1.1.2016\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"colorin\"\r\n"
+	    "\r\n"
+	    "#80ff00\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"rangein\"\r\n"
+	    "\r\n"
+	    "3\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"monthin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"weekin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"timein\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datetimen\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datetimelocalin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"emailin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"searchin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"telin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"urlin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"filein\"; filename=\"\"\r\n"
+	    "Content-Type: application/octet-stream\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=filesin; filename=\r\n"
+	    "Content-Type: application/octet-stream\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"selectin\"\r\n"
+	    "\r\n"
+	    "opt1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"message\"\r\n"
+	    "\r\n"
+	    "Text area default text.\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388--\r\n"
+	    "epilogue\r\n"
+	    "epilogue\r\n"
+	    "\r\n"
+	    "1234567890-=!@£$%^&*()_+[]{};'\\:\"|,./<>?`~§\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "epilogue\r\n";
+	body_len = strlen(multipart_body);
+	ck_assert_uint_eq(body_len, 2453); /* not required */
+
+	client_conn =
+	    mg_download("localhost",
+	                8884,
+	                0,
+	                ebuf,
+	                sizeof(ebuf),
+	                "POST /handle_form HTTP/1.1\r\n"
+	                "Host: localhost:8884\r\n"
+	                "Connection: close\r\n"
+	                "Content-Type: multipart/form-data; "
+	                "boundary=multipart-form-data-boundary--see-RFC-2388\r\n"
+	                "Content-Length: %u\r\n"
+	                "\r\n%s",
+	                (unsigned int)body_len,
+	                multipart_body);
+
+	ck_assert(client_conn != NULL);
+	for (sleep_cnt = 0; sleep_cnt < 30; sleep_cnt++) {
+		test_sleep(1);
+		if (g_field_step == 1000) {
+			break;
+		}
+	}
+	client_ri = mg_get_response_info(client_conn);
+
+	ck_assert(client_ri != NULL);
+	ck_assert_int_eq(client_ri->status_code, 200);
+	mg_close_connection(client_conn);
+
+	/* Handle form: "POST multipart/form-data" with preamble*/
+	/*
+	 * https://datatracker.ietf.org/doc/html/rfc2046#section-5.1
+	 *
+	 * multipart-body := [preamble CRLF]
+	 *     dash-boundary transport-padding CRLF
+	 *     body-part *encapsulation
+	 *     close-delimiter transport-padding
+	 *     [CRLF epilogue]
+	 *
+	 * preamble := discard-text
+	 *
+	 * discard-text := *(*text CRLF) *text
+	 *
+	 * text := <any CHAR, including bare CR & bare LF, but NOT including CRLF>
+	 */
+	multipart_body =
+	    "\r\n"
+	    "\r\npreamble"
+	    "\r\npreamble"
+	    "\r\npreamble"
+	    "\r\n"
+	    "\r\npreamble"
+	    "\r\n"
+	    "1234567890-=!@£$%^&*()_+[]{};'\\:\"|,./<>?`~§\r\n"
+	    "\r\n"
+	    "\r\n\t\t\t   \t\t\t"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"textin\"\r\n"
+	    "\r\n"
+	    "text\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"passwordin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"radio1\"\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=radio2\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"check1\"\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"numberin\"\r\n"
+	    "\r\n"
+	    "1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datein\"\r\n"
+	    "\r\n"
+	    "1.1.2016\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"colorin\"\r\n"
+	    "\r\n"
+	    "#80ff00\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"rangein\"\r\n"
+	    "\r\n"
+	    "3\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"monthin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"weekin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"timein\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datetimen\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datetimelocalin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"emailin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"searchin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"telin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"urlin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"filein\"; filename=\"\"\r\n"
+	    "Content-Type: application/octet-stream\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=filesin; filename=\r\n"
+	    "Content-Type: application/octet-stream\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"selectin\"\r\n"
+	    "\r\n"
+	    "opt1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"message\"\r\n"
+	    "\r\n"
+	    "Text area default text.\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388--\r\n";
+	body_len = strlen(multipart_body);
+	ck_assert_uint_eq(body_len, 2478); /* not required */
+
+	client_conn =
+	    mg_download("localhost",
+	                8884,
+	                0,
+	                ebuf,
+	                sizeof(ebuf),
+	                "POST /handle_form HTTP/1.1\r\n"
+	                "Host: localhost:8884\r\n"
+	                "Connection: close\r\n"
+	                "Content-Type: multipart/form-data; "
+	                "boundary=multipart-form-data-boundary--see-RFC-2388\r\n"
+	                "Content-Length: %u\r\n"
+	                "\r\n%s",
+	                (unsigned int)body_len,
+	                multipart_body);
+
+	ck_assert(client_conn != NULL);
+	for (sleep_cnt = 0; sleep_cnt < 30; sleep_cnt++) {
+		test_sleep(1);
+		if (g_field_step == 1000) {
+			break;
+		}
+	}
+	client_ri = mg_get_response_info(client_conn);
+
+	ck_assert(client_ri != NULL);
+	ck_assert_int_eq(client_ri->status_code, 200);
+	mg_close_connection(client_conn);
+
+	/* Handle form: "POST multipart/form-data" with transport padding*/
+	multipart_body =
+	    "--multipart-form-data-boundary--see-RFC-2388           \r\n"
+	    "Content-Disposition: form-data; name=\"textin\"\r\n"
+	    "\r\n"
+	    "text\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\t\t\t\r\n"
+	    "Content-Disposition: form-data; name=\"passwordin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"radio1\"\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=radio2\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"check1\"\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"numberin\"\r\n"
+	    "\r\n"
+	    "1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datein\"\r\n"
+	    "\r\n"
+	    "1.1.2016\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"colorin\"\r\n"
+	    "\r\n"
+	    "#80ff00\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"rangein\"\r\n"
+	    "\r\n"
+	    "3\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"monthin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"weekin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"timein\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datetimen\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datetimelocalin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"emailin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"searchin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"telin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"urlin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"filein\"; filename=\"\"\r\n"
+	    "Content-Type: application/octet-stream\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=filesin; filename=\r\n"
+	    "Content-Type: application/octet-stream\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"selectin\"\r\n"
+	    "\r\n"
+	    "opt1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"message\"\r\n"
+	    "\r\n"
+	    "Text area default text.\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388--\r\n";
+	body_len = strlen(multipart_body);
+	ck_assert_uint_eq(body_len, 2382); /* not required */
+
+	client_conn =
+	    mg_download("localhost",
+	                8884,
+	                0,
+	                ebuf,
+	                sizeof(ebuf),
+	                "POST /handle_form HTTP/1.1\r\n"
+	                "Host: localhost:8884\r\n"
+	                "Connection: close\r\n"
+	                "Content-Type: multipart/form-data; "
+	                "boundary=multipart-form-data-boundary--see-RFC-2388\r\n"
+	                "Content-Length: %u\r\n"
+	                "\r\n%s",
+	                (unsigned int)body_len,
+	                multipart_body);
+
+	ck_assert(client_conn != NULL);
+	for (sleep_cnt = 0; sleep_cnt < 30; sleep_cnt++) {
+		test_sleep(1);
+		if (g_field_step == 1000) {
+			break;
+		}
+	}
+	client_ri = mg_get_response_info(client_conn);
+
+	ck_assert(client_ri != NULL);
+	ck_assert_int_eq(client_ri->status_code, 200);
+	mg_close_connection(client_conn);
+
+	/* Handle form: "POST multipart/form-data" with custom name fields in the
+	 * Content-Disposition */
+	multipart_body =
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; "
+		"custom1name=\"1\"; "
+		"custom2name=\"2\"; "
+		"custom3name=\"3\"; "
+		"custom4name=\"4\"; "
+		"name=\"textin\"\r\n"
+	    "\r\n"
+	    "text\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\t\t\t\r\n"
+	    "Content-Disposition: form-data; name=\"passwordin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"radio1\"\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=radio2\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"check1\"\r\n"
+	    "\r\n"
+	    "val1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"numberin\"\r\n"
+	    "\r\n"
+	    "1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datein\"\r\n"
+	    "\r\n"
+	    "1.1.2016\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"colorin\"\r\n"
+	    "\r\n"
+	    "#80ff00\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"rangein\"\r\n"
+	    "\r\n"
+	    "3\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"monthin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"weekin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"timein\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datetimen\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"datetimelocalin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"emailin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"searchin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"telin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"urlin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"filein\"; filename=\"\"\r\n"
+	    "Content-Type: application/octet-stream\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=filesin; filename=\r\n"
+	    "Content-Type: application/octet-stream\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"selectin\"\r\n"
+	    "\r\n"
+	    "opt1\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
+	    "Content-Disposition: form-data; name=\"message\"\r\n"
+	    "\r\n"
+	    "Text area default text.\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388--\r\n";
+	body_len = strlen(multipart_body);
+	ck_assert_uint_eq(body_len, 2439); /* not required */
+
+	client_conn =
+	    mg_download("localhost",
+	                8884,
+	                0,
+	                ebuf,
+	                sizeof(ebuf),
+	                "POST /handle_form HTTP/1.1\r\n"
+	                "Host: localhost:8884\r\n"
+	                "Connection: close\r\n"
+	                "Content-Type: multipart/form-data; "
+	                "boundary=multipart-form-data-boundary--see-RFC-2388\r\n"
+	                "Content-Length: %u\r\n"
+	                "\r\n%s",
+	                (unsigned int)body_len,
+	                multipart_body);
+
+	ck_assert(client_conn != NULL);
+	for (sleep_cnt = 0; sleep_cnt < 30; sleep_cnt++) {
+		test_sleep(1);
+		if (g_field_step == 1000) {
+			break;
+		}
+	}
+	client_ri = mg_get_response_info(client_conn);
+
+	ck_assert(client_ri != NULL);
+	ck_assert_int_eq(client_ri->status_code, 200);
+	mg_close_connection(client_conn);
+
+	/* Handle form error cases */
+	/* Handle form: "POST multipart/form-data" empty body */
+	multipart_body = "";
+	body_len = strlen(multipart_body);
+	ck_assert_uint_eq(body_len, 0); /* not required */
+
+	client_conn =
+	    mg_download("localhost",
+	                8884,
+	                0,
+	                ebuf,
+	                sizeof(ebuf),
+	                "POST /handle_form_error HTTP/1.1\r\n"
+	                "Host: localhost:8884\r\n"
+	                "Connection: close\r\n"
+	                "Content-Type: multipart/form-data; "
+	                "boundary=multipart-form-data-boundary--see-RFC-2388\r\n"
+	                "Content-Length: %u\r\n"
+	                "\r\n%s",
+	                (unsigned int)body_len,
+	                multipart_body);
+
+	ck_assert(client_conn != NULL);
+	for (sleep_cnt = 0; sleep_cnt < 30; sleep_cnt++) {
+		test_sleep(1);
+		if (g_field_step == 1000) {
+			break;
+		}
+	}
+	client_ri = mg_get_response_info(client_conn);
+
+	ck_assert(client_ri != NULL);
+	ck_assert_int_eq(client_ri->status_code, 200);
+	mg_close_connection(client_conn);
+
+	/* Handle form: "POST multipart/form-data" very long preamble */
+	multipart_body =
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "preamblepreamblepreamblepreamblepreamble\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388\r\n";
+	    "Content-Disposition: form-data; name=\"passwordin\"\r\n"
+	    "\r\n"
+	    "\r\n"
+	    "--multipart-form-data-boundary--see-RFC-2388--\r\n";
+
+	body_len = strlen(multipart_body);
+	ck_assert_uint_eq(body_len, 1768); /* not required */
+
+	client_conn =
+	    mg_download("localhost",
+	                8884,
+	                0,
+	                ebuf,
+	                sizeof(ebuf),
+	                "POST /handle_form_error HTTP/1.1\r\n"
+	                "Host: localhost:8884\r\n"
+	                "Connection: close\r\n"
+	                "Content-Type: multipart/form-data; "
+	                "boundary=multipart-form-data-boundary--see-RFC-2388\r\n"
+	                "Content-Length: %u\r\n"
+	                "\r\n%s",
+	                (unsigned int)body_len,
+	                multipart_body);
+
+	ck_assert(client_conn != NULL);
+	for (sleep_cnt = 0; sleep_cnt < 30; sleep_cnt++) {
+		test_sleep(1);
+		if (g_field_step == 1000) {
+			break;
+		}
+	}
+	client_ri = mg_get_response_info(client_conn);
+
+	ck_assert(client_ri != NULL);
+	ck_assert_int_eq(client_ri->status_code, 200);
+	mg_close_connection(client_conn);
 
 	/* Now test form_store */
 
@@ -3809,6 +4630,28 @@ START_TEST(test_error_handling)
 	mg_close_connection(client_conn);
 	test_sleep(1);
 
+
+	/* Try DELETE when put_delete_auth_file is not configured */
+	memset(client_err, 0, sizeof(client_err));
+	client_conn =
+	    mg_connect_client("127.0.0.1", 8080, 0, client_err, sizeof(client_err));
+
+	ck_assert_str_eq(client_err, "");
+	ck_assert(client_conn != NULL);
+
+	mg_printf(client_conn, "DELETE /something/not/existing HTTP/1.0\r\n\r\n");
+	client_res =
+	    mg_get_response(client_conn, client_err, sizeof(client_err), 10000);
+	ck_assert_int_ge(client_res, 0);
+	ck_assert_str_eq(client_err, "");
+	client_ri = mg_get_response_info(client_conn);
+	ck_assert(client_ri != NULL);
+
+	ck_assert_int_eq(client_ri->status_code, 405);
+	mg_close_connection(client_conn);
+	test_sleep(1);
+
+
 	/* Create an error.htm file */
 	f = fopen("error.htm", "wt");
 	ck_assert(f != NULL);
@@ -4349,7 +5192,7 @@ START_TEST(test_large_file)
 	OPTIONS[opt_cnt++] = "8443s";
 	OPTIONS[opt_cnt++] = "ssl_certificate";
 	OPTIONS[opt_cnt++] = ssl_cert;
-#ifdef __MACH__
+#if defined(__MACH__) && defined(__APPLE__)
 	/* The Apple builds on Travis CI seem to have problems with TLS1.x
 	 * Allow SSLv3 and TLS */
 	OPTIONS[opt_cnt++] = "ssl_protocol_version";
@@ -4622,143 +5465,6 @@ START_TEST(test_mg_store_body)
 END_TEST
 
 
-#if defined(MG_USE_OPEN_FILE) && !defined(NO_FILES)
-
-#define FILE_IN_MEM_SIZE (1024 * 100)
-static char *file_in_mem_data;
-
-static const char *
-test_file_in_memory_open_file(const struct mg_connection *conn,
-                              const char *file_path,
-                              size_t *file_size)
-{
-	(void)conn;
-
-	if (strcmp(file_path, "./file_in_mem") == 0) {
-		/* File is in memory */
-		*file_size = FILE_IN_MEM_SIZE;
-		return file_in_mem_data;
-	} else {
-		/* File is not in memory */
-		return NULL;
-	}
-}
-
-
-START_TEST(test_file_in_memory)
-{
-	/* Server var */
-	struct mg_context *ctx;
-	struct mg_callbacks callbacks;
-	const char *OPTIONS[32];
-	int opt_cnt = 0;
-#if !defined(NO_SSL)
-	const char *ssl_cert = locate_ssl_cert();
-#endif
-
-	/* Client var */
-	struct mg_connection *client;
-	char client_err_buf[256];
-	char client_data_buf[256];
-	const struct mg_request_info *client_ri;
-	int64_t data_read;
-	int r, i;
-
-	/* Prepare test data */
-	file_in_mem_data = (char *)malloc(FILE_IN_MEM_SIZE);
-	ck_assert_ptr_ne(file_in_mem_data, NULL);
-	for (r = 0; r < FILE_IN_MEM_SIZE; r++) {
-		file_in_mem_data[r] = (char)(r);
-	}
-
-	/* Set options and start server */
-	OPTIONS[opt_cnt++] = "document_root";
-	OPTIONS[opt_cnt++] = ".";
-#if defined(NO_SSL)
-	OPTIONS[opt_cnt++] = "listening_ports";
-	OPTIONS[opt_cnt++] = "8080";
-#else
-	OPTIONS[opt_cnt++] = "listening_ports";
-	OPTIONS[opt_cnt++] = "8443s";
-	OPTIONS[opt_cnt++] = "ssl_certificate";
-	OPTIONS[opt_cnt++] = ssl_cert;
-	ck_assert(ssl_cert != NULL);
-#endif
-	OPTIONS[opt_cnt] = NULL;
-
-
-	memset(&callbacks, 0, sizeof(callbacks));
-	callbacks.open_file = test_file_in_memory_open_file;
-
-	ctx = test_mg_start(&callbacks, 0, OPTIONS, __LINE__);
-	ck_assert(ctx != NULL);
-
-	/* connect client */
-	memset(client_err_buf, 0, sizeof(client_err_buf));
-	memset(client_data_buf, 0, sizeof(client_data_buf));
-
-	client =
-	    mg_download("127.0.0.1",
-#if defined(NO_SSL)
-	                8080,
-	                0,
-#else
-	                8443,
-	                1,
-#endif
-	                client_err_buf,
-	                sizeof(client_err_buf),
-	                "GET /file_in_mem HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
-
-	ck_assert(client != NULL);
-	ck_assert_str_eq(client_err_buf, "");
-
-	client_ri = mg_get_response_info(client);
-
-	ck_assert(client_ri != NULL);
-	ck_assert_int_eq(client_ri->status_code, 200);
-
-	ck_assert_int_eq(client_ri->content_length, FILE_IN_MEM_SIZE);
-
-	data_read = 0;
-	while (data_read < client_ri->content_length) {
-		r = mg_read(client, client_data_buf, sizeof(client_data_buf));
-		if (r > 0) {
-			for (i = 0; i < r; i++) {
-				ck_assert_int_eq((int)client_data_buf[i],
-				                 (int)file_in_mem_data[data_read + i]);
-			}
-			data_read += r;
-		}
-	}
-
-	/* Nothing left to read */
-	r = mg_read(client, client_data_buf, sizeof(client_data_buf));
-	ck_assert_int_eq(r, 0);
-
-	/* Close the client connection */
-	mg_close_connection(client);
-
-	/* Stop the server */
-	test_mg_stop(ctx, __LINE__);
-
-	/* Free test data */
-	free(file_in_mem_data);
-	file_in_mem_data = NULL;
-}
-END_TEST
-
-#else /* defined(MG_USE_OPEN_FILE) */
-
-START_TEST(test_file_in_memory)
-{
-	mark_point();
-}
-END_TEST
-
-#endif
-
-
 static void
 minimal_http_https_client_impl(const char *server,
                                uint16_t port,
@@ -4898,6 +5604,7 @@ START_TEST(test_minimal_tls_client)
 	const char *external_server_ip;
 	mark_point();
 	external_server_ip = get_external_server_ip();
+	(void)external_server_ip; /* unused in some cases */
 	mark_point();
 
 #if !defined(NO_SSL) /* dont run https test if SSL is not enabled */
@@ -5015,8 +5722,8 @@ START_TEST(test_minimal_http_server_callback)
 	/* Call a test client */
 	minimal_http_client_check("127.0.0.1",
 	                          8080,
-	                          "/8?Altenative=Response",
-	                          "Altenative=Response");
+	                          "/8?Alternative=Response",
+	                          "Alternative=Response");
 
 	/* Run the server for 5 seconds */
 	test_sleep(5);
@@ -5123,8 +5830,8 @@ START_TEST(test_minimal_https_server_callback)
 	/* Call a test client */
 	minimal_https_client_check("127.0.0.1",
 	                           8443,
-	                           "/8?Altenative=Response",
-	                           "Altenative=Response");
+	                           "/8?Alternative=Response",
+	                           "Alternative=Response");
 
 	/* Run the server for 5 seconds */
 	test_sleep(5);
@@ -5256,10 +5963,6 @@ make_public_server_suite(void)
 	tcase_set_timeout(tcase_large_file, civetweb_mid_server_test_timeout);
 	suite_add_tcase(suite, tcase_large_file);
 
-	tcase_add_test(tcase_file_in_mem, test_file_in_memory);
-	tcase_set_timeout(tcase_file_in_mem, civetweb_mid_server_test_timeout);
-	suite_add_tcase(suite, tcase_file_in_mem);
-
 	return suite;
 }
 #endif
@@ -5302,7 +6005,6 @@ MAIN_PUBLIC_SERVER(void)
 	test_error_log_file(0);
 	test_throttle(0);
 	test_large_file(0);
-	test_file_in_memory(0);
 
 	mg_exit_library();
 

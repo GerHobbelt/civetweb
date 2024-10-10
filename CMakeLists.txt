@@ -1,15 +1,11 @@
-# Determines what CMake APIs we can rely on
-cmake_minimum_required (VERSION 3.1.4)
-if (${CMAKE_VERSION} VERSION_GREATER 3.2.2)
-  cmake_policy(VERSION 3.2.2)
-endif()
-if (${CMAKE_VERSION} VERSION_GREATER 3.1 OR
-    ${CMAKE_VERSION} VERSION_EQUAL 3.1)
-  cmake_policy(SET CMP0054 NEW)
-endif()
+# Use at least CMake 3.3
+cmake_minimum_required (VERSION 3.3.0)
+cmake_policy(VERSION 3.2.2)
+cmake_policy(SET CMP0054 NEW)
+cmake_policy(SET CMP0057 NEW)
 
 # Set up the project
-project (civetweb)
+project (civetweb VERSION 1.16.0)
 
 # Detect the platform reliably
 if(ZEPHYR_BASE)
@@ -41,7 +37,7 @@ include(AddCXXCompilerFlag)
 include(DetermineTargetArchitecture)
 include(CMakeDependentOption)
 
-set(CIVETWEB_VERSION "1.15.0" CACHE STRING "The version of the civetweb library")
+set(CIVETWEB_VERSION "1.16.0" CACHE STRING "The version of the civetweb library")
 string(REGEX MATCH "([0-9]+)\\.([0-9]+)\\.([0-9]+)" CIVETWEB_VERSION_MATCH "${CIVETWEB_VERSION}")
 if ("${CIVETWEB_VERSION_MATCH}" STREQUAL "")
   message(FATAL_ERROR "Must specify a semantic version: major.minor.patch")
@@ -84,13 +80,22 @@ message(STATUS "Disable caching support - ${CIVETWEB_DISABLE_CACHING}")
 option(CIVETWEB_ENABLE_CXX "Enables the C++ wrapper library" OFF)
 message(STATUS "C++ wrappers - ${CIVETWEB_ENABLE_CXX}")
 
+# HTTP2 Support
+option(CIVETWEB_ENABLE_HTTP2 "Enables HTTP2 support" OFF)
+message(STATUS "Use HTPP2 - ${CIVETWEB_ENABLE_HTTP2}")
+
 # IP Version 6
-option(CIVETWEB_ENABLE_IPV6 "Enables the IP version 6 support" OFF)
+option(CIVETWEB_ENABLE_IPV6 "Enables the IP version 6 support" ON)
 message(STATUS "IP Version 6 - ${CIVETWEB_ENABLE_IPV6}")
 
 # Websocket support
 option(CIVETWEB_ENABLE_WEBSOCKETS "Enable websockets connections" OFF)
 message(STATUS "Websockets support - ${CIVETWEB_ENABLE_WEBSOCKETS}")
+
+# X DOM sockets support
+option(CIVETWEB_ENABLE_X_DOM_SOCKET "Enable X DOM sockets support" OFF)
+message(STATUS "X DOM sockets support - ${CIVETWEB_ENABLE_X_DOM_SOCKET}")
+
 
 # Server statistics support
 option(CIVETWEB_ENABLE_SERVER_STATS "Enable server statistics" OFF)
@@ -183,7 +188,7 @@ if (CIVETWEB_ENABLE_LUA)
   mark_as_advanced(CIVETWEB_LUA_SQLITE_VERSION)
 
   # Lua SQLite Verification Hash
-  set(CIVETWEB_LUA_SQLITE_MD5_HASH 43234ae08197dfce6da02482ed14ec92 CACHE STRING
+  set(CIVETWEB_LUA_SQLITE_MD5_HASH ff7abd4aa8bd549eb18298fb954612f8 CACHE STRING
     "The hash of Lua SQLite archive to be downloaded")
   set_property(CACHE CIVETWEB_LUA_SQLITE_MD5_HASH PROPERTY VALUE ${CIVETWEB_LUA_SQLITE_MD5_HASH})
   mark_as_advanced(CIVETWEB_LUA_SQLITE_MD5_HASH)
@@ -230,6 +235,13 @@ message(STATUS "Compile for OpenSSL 1.0 API - ${CIVETWEB_SSL_OPENSSL_API_1_0}")
 # OpenSSL 1.1 API
 option(CIVETWEB_SSL_OPENSSL_API_1_1 "Use the OpenSSL 1.1 API" ON)
 message(STATUS "Compile for OpenSSL 1.1 API - ${CIVETWEB_SSL_OPENSSL_API_1_1}")
+
+# OpenSSL 3.0 API
+option(CIVETWEB_SSL_OPENSSL_API_3_0 "Use the OpenSSL 3.0 API" OFF)
+message(STATUS "Compile for OpenSSL 3.0 API - ${CIVETWEB_SSL_OPENSSL_API_3_0}")
+
+option(CIVETWEB_ENABLE_MBEDTLS "Use the MbedTls" OFF)
+message(STATUS "SSL support - ${CIVETWEB_ENABLE_MBEDTLS}")
 
 # Dynamically load or link the SSL libraries
 cmake_dependent_option(
@@ -488,11 +500,17 @@ if (${CMAKE_BUILD_TYPE} MATCHES "[Dd]ebug")
   add_definitions(-O0)
   add_definitions(-g)
 endif()
+if (CIVETWEB_ENABLE_HTTP2)
+  add_definitions(-DUSE_HTTP2)
+endif()
 if (CIVETWEB_ENABLE_IPV6)
   add_definitions(-DUSE_IPV6)
 endif()
 if (CIVETWEB_ENABLE_WEBSOCKETS)
   add_definitions(-DUSE_WEBSOCKET)
+endif()
+if (CIVETWEB_ENABLE_X_DOM_SOCKET)
+   add_definitions(-DUSE_X_DOM_SOCKET)
 endif()
 if (CIVETWEB_ENABLE_SERVER_STATS)
   add_definitions(-DUSE_SERVER_STATS)
@@ -523,6 +541,8 @@ if (CIVETWEB_ENABLE_MEMORY_DEBUGGING)
 endif()
 if (NOT CIVETWEB_ENABLE_SSL)
   add_definitions(-DNO_SSL)
+elseif (CIVETWEB_ENABLE_MBEDTLS)
+  add_definitions(-DUSE_MBEDTLS)
 elseif (NOT CIVETWEB_ENABLE_SSL_DYNAMIC_LOADING)
   add_definitions(-DNO_SSL_DL)
 else()
@@ -540,9 +560,19 @@ endif()
 if(CIVETWEB_SSL_OPENSSL_API_1_1)
   add_definitions(-DOPENSSL_API_1_1)
 endif()
+if(CIVETWEB_SSL_OPENSSL_API_3_0)
+  add_definitions(-DOPENSSL_API_3_0)
+endif()
 if(CIVETWEB_SSL_OPENSSL_API_1_0 AND CIVETWEB_SSL_OPENSSL_API_1_1)
   message(FATAL_ERROR "Multiple SSL API versions defined")
 endif()
+if(CIVETWEB_SSL_OPENSSL_API_1_0 AND CIVETWEB_SSL_OPENSSL_API_3_0)
+  message(FATAL_ERROR "Multiple SSL API versions defined")
+endif()
+if(CIVETWEB_SSL_OPENSSL_API_1_1 AND CIVETWEB_SSL_OPENSSL_API_3_0)
+  message(FATAL_ERROR "Multiple SSL API versions defined")
+endif()
+
 
 add_definitions(-DUSE_STACK_SIZE=${CIVETWEB_THREAD_STACK_SIZE})
 
@@ -563,8 +593,10 @@ endif()
 add_subdirectory(src)
 
 # Enable the testing of the library/executable
-include(CTest)
+
 if (CIVETWEB_BUILD_TESTING)
+  include(CTest)
+
   # Check unit testing framework Version
   set(CIVETWEB_CHECK_VERSION 0.11.0 CACHE STRING
     "The version of Check unit testing framework to build and include statically")
@@ -601,7 +633,31 @@ configure_package_config_file(
   ${PROJECT_NAME}-config.cmake
   INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
   NO_CHECK_REQUIRED_COMPONENTS_MACRO
-  PATH_VARS CMAKE_INSTALL_INCLUDEDIR
+  PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_LIBDIR CIVETWEB_ENABLE_CXX
+)
+
+configure_file(
+  cmake/${PROJECT_NAME}.pc.in
+  ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.pc
+  @ONLY
+)
+
+configure_file(
+  cmake/${PROJECT_NAME}-cpp.pc.in
+  ${PROJECT_BINARY_DIR}/${PROJECT_NAME}-cpp.pc
+  @ONLY
+)
+
+install(
+  FILES
+    "${PROJECT_BINARY_DIR}/${PROJECT_NAME}.pc"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
+)
+
+install(
+  FILES
+    "${PROJECT_BINARY_DIR}/${PROJECT_NAME}-cpp.pc"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )
 
 write_basic_package_version_file(${PROJECT_NAME}-config-version.cmake
@@ -652,4 +708,3 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "${CPACK_PACKAGE_DEPENDS}")
 
 # Finalize CPack settings
 include(CPack)
-
