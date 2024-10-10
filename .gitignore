@@ -27,6 +27,7 @@ log.out
 /CMakeCache.txt
 /CMakeFiles
 /mingw-builds
+/output
 
 #################
 ## Eclipse
@@ -205,6 +206,14 @@ UpgradeLog*.htm
 # SQL Server files
 App_Data/*.mdf
 App_Data/*.ldf
+
+
+#################
+## Other IDEs
+#################
+
+*.kdev4
+
 
 #############
 ## Windows detritus

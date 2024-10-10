@@ -55,6 +55,8 @@ url_encoded_field_found(const struct mg_connection *conn,
 			mg_cry_internal(conn, "%s: Cannot decode filename", __func__);
 			return MG_FORM_FIELD_STORAGE_SKIP;
 		}
+		remove_dot_segments(filename_dec);
+
 	} else {
 		filename_dec[0] = 0;
 	}
@@ -83,16 +85,18 @@ url_encoded_field_found(const struct mg_connection *conn,
 }
 
 static int
-url_encoded_field_get(const struct mg_connection *conn,
-                      const char *key,
-                      size_t key_len,
-                      const char *value,
-                      size_t value_len,
-                      struct mg_form_data_handler *fdh)
+url_encoded_field_get(
+    const struct mg_connection *conn,
+    const char *key,
+    size_t key_len,
+    const char *value,
+    size_t *value_len, /* IN: number of bytes available in "value", OUT: number
+                          of bytes processed */
+    struct mg_form_data_handler *fdh)
 {
 	char key_dec[1024];
 
-	char *value_dec = (char *)mg_malloc_ctx(value_len + 1, conn->phys_ctx);
+	char *value_dec = (char *)mg_malloc_ctx(*value_len + 1, conn->phys_ctx);
 	int value_dec_len, ret;
 
 	if (!value_dec) {
@@ -100,14 +104,18 @@ url_encoded_field_get(const struct mg_connection *conn,
 		mg_cry_internal(conn,
 		                "%s: Not enough memory (required: %lu)",
 		                __func__,
-		                (unsigned long)(value_len + 1));
+		                (unsigned long)(*value_len + 1));
 		return MG_FORM_FIELD_STORAGE_ABORT;
 	}
 
 	mg_url_decode(key, (int)key_len, key_dec, (int)sizeof(key_dec), 1);
 
-	value_dec_len =
-	    mg_url_decode(value, (int)value_len, value_dec, (int)value_len + 1, 1);
+	if (*value_len >= 2 && value[*value_len - 2] == '%')
+		*value_len -= 2;
+	else if (*value_len >= 1 && value[*value_len - 1] == '%')
+		(*value_len)--;
+	value_dec_len = mg_url_decode(
+	    value, (int)*value_len, value_dec, ((int)*value_len) + 1, 1);
 
 	ret = fdh->field_get(key_dec,
 	                     value_dec,
@@ -154,14 +162,17 @@ search_boundary(const char *buf,
                 const char *boundary,
                 size_t boundary_len)
 {
-	/* We must do a binary search here, not a string search, since the buffer
-	 * may contain '\x00' bytes, if binary data is transferred. */
-	int clen = (int)buf_len - (int)boundary_len - 4;
+	char *boundary_start = "\r\n--";
+	size_t boundary_start_len = strlen(boundary_start);
+
+	/* We must do a binary search here, not a string search, since the
+	 * buffer may contain '\x00' bytes, if binary data is transferred. */
+	int clen = (int)buf_len - (int)boundary_len - boundary_start_len;
 	int i;
 
 	for (i = 0; i <= clen; i++) {
-		if (!memcmp(buf + i, "\r\n--", 4)) {
-			if (!memcmp(buf + i + 4, boundary, boundary_len)) {
+		if (!memcmp(buf + i, boundary_start, boundary_start_len)) {
+			if (!memcmp(buf + i + boundary_start_len, boundary, boundary_len)) {
 				return buf + i;
 			}
 		}
@@ -177,7 +188,7 @@ mg_handle_form_request(struct mg_connection *conn,
 	char path[512];
 	char buf[MG_BUF_LEN]; /* Must not be smaller than ~900 */
 	int field_storage;
-	int buf_fill = 0;
+	size_t buf_fill = 0;
 	int r;
 	int field_count = 0;
 	struct mg_file fstore = STRUCT_FILE_INITIALIZER;
@@ -212,7 +223,7 @@ mg_handle_form_request(struct mg_connection *conn,
 		}
 
 		/* GET request: form data is in the query string. */
-		/* The entire data has already been loaded, so there is no nead to
+		/* The entire data has already been loaded, so there is no need to
 		 * call mg_read. We just need to split the query string into key-value
 		 * pairs. */
 		data = conn->request_info.query_string;
@@ -260,16 +271,14 @@ mg_handle_form_request(struct mg_connection *conn,
 			next = strchr(val, '&');
 			if (next) {
 				vallen = next - val;
-				next++;
 			} else {
 				vallen = (ptrdiff_t)strlen(val);
-				next = val + vallen;
 			}
 
 			if (field_storage == MG_FORM_FIELD_STORAGE_GET) {
 				/* Call callback */
 				r = url_encoded_field_get(
-				    conn, data, (size_t)keylen, val, (size_t)vallen, fdh);
+				    conn, data, (size_t)keylen, val, (size_t *)&vallen, fdh);
 				if (r == MG_FORM_FIELD_HANDLE_ABORT) {
 					/* Stop request handling */
 					break;
@@ -279,6 +288,14 @@ mg_handle_form_request(struct mg_connection *conn,
 					field_storage = MG_FORM_FIELD_STORAGE_SKIP;
 				}
 			}
+
+			if (next) {
+				next++;
+			} else {
+				/* vallen may have been modified by url_encoded_field_get */
+				next = val + vallen;
+			}
+
 #if !defined(NO_FILESYSTEMS)
 			if (field_storage == MG_FORM_FIELD_STORAGE_STORE) {
 				/* Store the content to a file */
@@ -380,10 +397,10 @@ mg_handle_form_request(struct mg_connection *conn,
 			int end_of_key_value_pair_found = 0;
 			int get_block;
 
-			if ((size_t)buf_fill < (sizeof(buf) - 1)) {
+			if (buf_fill < (sizeof(buf) - 1)) {
 
-				size_t to_read = sizeof(buf) - 1 - (size_t)buf_fill;
-				r = mg_read(conn, buf + (size_t)buf_fill, to_read);
+				size_t to_read = sizeof(buf) - 1 - buf_fill;
+				r = mg_read(conn, buf + buf_fill, to_read);
 				if ((r < 0) || ((r == 0) && all_data_read)) {
 					/* read error */
 					return -1;
@@ -450,11 +467,9 @@ mg_handle_form_request(struct mg_connection *conn,
 				next = strchr(val, '&');
 				if (next) {
 					vallen = next - val;
-					next++;
 					end_of_key_value_pair_found = 1;
 				} else {
 					vallen = (ptrdiff_t)strlen(val);
-					next = val + vallen;
 					end_of_key_value_pair_found = all_data_read;
 				}
 
@@ -472,7 +487,7 @@ mg_handle_form_request(struct mg_connection *conn,
 					                               ? 0
 					                               : (size_t)keylen),
 					                          val,
-					                          (size_t)vallen,
+					                          (size_t *)&vallen,
 					                          fdh);
 					get_block++;
 					if (r == MG_FORM_FIELD_HANDLE_ABORT) {
@@ -484,6 +499,14 @@ mg_handle_form_request(struct mg_connection *conn,
 						field_storage = MG_FORM_FIELD_STORAGE_SKIP;
 					}
 				}
+
+				if (next) {
+					next++;
+				} else {
+					/* vallen may have been modified by url_encoded_field_get */
+					next = val + vallen;
+				}
+
 #if !defined(NO_FILESYSTEMS)
 				if (fstore.access.fp) {
 					size_t n = (size_t)
@@ -506,11 +529,11 @@ mg_handle_form_request(struct mg_connection *conn,
 					        buf + (size_t)used,
 					        sizeof(buf) - (size_t)used);
 					next = buf;
-					buf_fill -= (int)used;
-					if ((size_t)buf_fill < (sizeof(buf) - 1)) {
+					buf_fill -= used;
+					if (buf_fill < (sizeof(buf) - 1)) {
 
-						size_t to_read = sizeof(buf) - 1 - (size_t)buf_fill;
-						r = mg_read(conn, buf + (size_t)buf_fill, to_read);
+						size_t to_read = sizeof(buf) - 1 - buf_fill;
+						r = mg_read(conn, buf + buf_fill, to_read);
 						if ((r < 0) || ((r == 0) && all_data_read)) {
 #if !defined(NO_FILESYSTEMS)
 							/* read error */
@@ -569,7 +592,7 @@ mg_handle_form_request(struct mg_connection *conn,
 			/* Proceed to next entry */
 			used = next - buf;
 			memmove(buf, buf + (size_t)used, sizeof(buf) - (size_t)used);
-			buf_fill -= (int)used;
+			buf_fill -= used;
 		}
 
 		return field_count;
@@ -604,6 +627,7 @@ mg_handle_form_request(struct mg_connection *conn,
 		}
 
 		/* Copy boundary string to variable "boundary" */
+		/* fbeg is pointer to start of value of boundary */
 		fbeg = content_type + bl + 9;
 		bl = strlen(fbeg);
 		boundary = (char *)mg_malloc(bl + 1);
@@ -658,12 +682,12 @@ mg_handle_form_request(struct mg_connection *conn,
 		for (part_no = 0;; part_no++) {
 			size_t towrite, fnlen, n;
 			int get_block;
-			size_t to_read = sizeof(buf) - 1 - (size_t)buf_fill;
+			size_t to_read = sizeof(buf) - 1 - buf_fill;
 
 			/* Unused without filesystems */
 			(void)n;
 
-			r = mg_read(conn, buf + (size_t)buf_fill, to_read);
+			r = mg_read(conn, buf + buf_fill, to_read);
 			if ((r < 0) || ((r == 0) && all_data_read)) {
 				/* read error */
 				mg_free(boundary);
@@ -681,43 +705,75 @@ mg_handle_form_request(struct mg_connection *conn,
 				return -1;
 			}
 
+			/* @see https://www.rfc-editor.org/rfc/rfc2046.html#section-5.1.1
+			 *
+			 * multipart-body := [preamble CRLF]
+			 *     dash-boundary transport-padding CRLF
+			 *     body-part *encapsulation
+			 *     close-delimiter transport-padding
+			 *     [CRLF epilogue]
+			 */
+
 			if (part_no == 0) {
-				int d = 0;
-				while ((d < buf_fill) && (buf[d] != '-')) {
-					d++;
+				size_t preamble_length = 0;
+				/* skip over the preamble until we find a complete boundary
+				 * limit the preamble length to prevent abuse */
+				/* +2 for the -- preceding the boundary */
+				while (preamble_length < 1024
+				       && (preamble_length < buf_fill - bl)
+				       && strncmp(buf + preamble_length + 2, boundary, bl)) {
+					preamble_length++;
 				}
-				if ((d > 0) && (buf[d] == '-')) {
-					memmove(buf, buf + d, (unsigned)buf_fill - (unsigned)d);
-					buf_fill -= d;
+				/* reset the start of buf to remove the preamble */
+				if (0 == strncmp(buf + preamble_length + 2, boundary, bl)) {
+					memmove(buf,
+					        buf + preamble_length,
+					        (unsigned)buf_fill - (unsigned)preamble_length);
+					buf_fill -= preamble_length;
 					buf[buf_fill] = 0;
 				}
 			}
 
-			if (buf[0] != '-' || buf[1] != '-') {
+			/* either it starts with a boundary and it's fine, or it's malformed
+			 * because:
+			 * - the preamble was longer than accepted
+			 * - couldn't find a boundary at all in the body
+			 * - didn't have a terminating boundary */
+			if (buf_fill < (bl + 2) || strncmp(buf, "--", 2)
+			    || strncmp(buf + 2, boundary, bl)) {
 				/* Malformed request */
 				mg_free(boundary);
 				return -1;
 			}
-			if (0 != strncmp(buf + 2, boundary, bl)) {
-				/* Malformed request */
-				mg_free(boundary);
-				return -1;
+
+			/* skip the -- */
+			char *boundary_start = buf + 2;
+			size_t transport_padding = 0;
+			while (boundary_start[bl + transport_padding] == ' '
+			       || boundary_start[bl + transport_padding] == '\t') {
+				transport_padding++;
 			}
-			if (buf[bl + 2] != '\r' || buf[bl + 3] != '\n') {
-				/* Every part must end with \r\n, if there is another part.
-				 * The end of the request has an extra -- */
-				if (((size_t)buf_fill != (size_t)(bl + 6))
-				    || (strncmp(buf + bl + 2, "--\r\n", 4))) {
+			char *boundary_end = boundary_start + bl + transport_padding;
+
+			/* after the transport padding, if the boundary isn't
+			 * immediately followed by a \r\n then it is either... */
+			if (strncmp(boundary_end, "\r\n", 2))
+			{
+				/* ...the final boundary, and it is followed by --, (in which
+				 * case it's the end of the request) or it's a malformed
+				 * request */
+				if (strncmp(boundary_end, "--", 2)) {
 					/* Malformed request */
 					mg_free(boundary);
 					return -1;
 				}
-				/* End of the request */
+				/* Ingore any epilogue here */
 				break;
 			}
 
+			/* skip the \r\n */
+			hbuf = boundary_end + 2;
 			/* Next, we need to get the part header: Read until \r\n\r\n */
-			hbuf = buf + bl + 4;
 			hend = strstr(hbuf, "\r\n\r\n");
 			if (!hend) {
 				/* Malformed request */
@@ -945,12 +1001,12 @@ mg_handle_form_request(struct mg_connection *conn,
 #endif /* NO_FILESYSTEMS */
 
 				memmove(buf, hend + towrite, bl + 4);
-				buf_fill = (int)(bl + 4);
+				buf_fill = bl + 4;
 				hend = buf;
 
 				/* Read new data */
-				to_read = sizeof(buf) - 1 - (size_t)buf_fill;
-				r = mg_read(conn, buf + (size_t)buf_fill, to_read);
+				to_read = sizeof(buf) - 1 - buf_fill;
+				r = mg_read(conn, buf + buf_fill, to_read);
 				if ((r < 0) || ((r == 0) && all_data_read)) {
 #if !defined(NO_FILESYSTEMS)
 					/* read error */
@@ -969,7 +1025,7 @@ mg_handle_form_request(struct mg_connection *conn,
 				/* buf_fill is at least 8 here */
 
 				/* Find boundary */
-				next = search_boundary(buf, (size_t)buf_fill, boundary, bl);
+				next = search_boundary(buf, buf_fill, boundary, bl);
 
 				if (!next && (r == 0)) {
 					/* incomplete request */
@@ -1044,7 +1100,7 @@ mg_handle_form_request(struct mg_connection *conn,
 			if (next) {
 				used = next - buf + 2;
 				memmove(buf, buf + (size_t)used, sizeof(buf) - (size_t)used);
-				buf_fill -= (int)used;
+				buf_fill -= used;
 			} else {
 				buf_fill = 0;
 			}

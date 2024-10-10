@@ -47,16 +47,23 @@ endif()
 
 # We need to link OpenSSL if not dynamically loading
 if (CIVETWEB_ENABLE_SSL)
-  if (CIVETWEB_ENABLE_SSL_DYNAMIC_LOADING)
-    find_package(LibDl)
-    if (LIBDL_FOUND)
-      target_link_libraries(civetweb-c-library -ldl)
-    endif()
+  if (CIVETWEB_ENABLE_MBEDTLS)
+    find_package(MbedTLS)
+    include_directories(${MbedTLS_INCLUDE_DIR})
+    message(STATUS "MbedTLS include directory: ${MbedTLS_INCLUDE_DIR}")
+    target_link_libraries(civetweb-c-library ${MbedTLS_LIBRARIES})
   else()
-    find_package(OpenSSL)
-    include_directories(${OPENSSL_INCLUDE_DIR})
-    message(STATUS "OpenSSL include directory: ${OPENSSL_INCLUDE_DIR}")
-    target_link_libraries(civetweb-c-library ${OPENSSL_LIBRARIES})
+    if (CIVETWEB_ENABLE_SSL_DYNAMIC_LOADING)
+      find_package(LibDl)
+      if (LIBDL_FOUND)
+        target_link_libraries(civetweb-c-library -ldl)
+      endif()
+    else()
+      find_package(OpenSSL)
+      include_directories(${OPENSSL_INCLUDE_DIR})
+      message(STATUS "OpenSSL include directory: ${OPENSSL_INCLUDE_DIR}")
+      target_link_libraries(civetweb-c-library ${OPENSSL_LIBRARIES})
+    endif()
   endif()
 endif()
 
@@ -246,6 +253,12 @@ if (CIVETWEB_ENABLE_LUA)
   target_link_libraries(civetweb-c-library ${LUA_LIBRARIES})
 endif()
 
+if (CIVETWEB_ENABLE_ZLIB)
+  find_package(ZLIB)
+  include_directories(${ZLIB_INCLUDE_DIRS})
+  target_link_libraries(civetweb-c-library ${ZLIB_LIBRARIES})
+endif()
+
 # The web server executable
 if (CIVETWEB_ENABLE_SERVER_EXECUTABLE)
     add_executable(civetweb-c-executable main.c)
@@ -257,9 +270,7 @@ if (CIVETWEB_ENABLE_SERVER_EXECUTABLE)
         install(
             TARGETS civetweb-c-executable
             EXPORT ${PROJECT_NAME}-targets
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
             COMPONENT server)
     endif()
     target_include_directories(

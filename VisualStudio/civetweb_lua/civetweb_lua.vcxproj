@@ -22,20 +22,20 @@
     <ProjectGuid>{9BE9C008-E851-42B1-A034-BD4630AE4CD6}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>civetweb_lua</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>8.1</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v140_xp</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
-    <CharacterSet>Unicode</CharacterSet>
+    <PlatformToolset>v140</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug CONSOLE|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -47,15 +47,15 @@
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <WholeProgramOptimization>true</WholeProgramOptimization>
-    <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v140_xp</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v140</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
-    <CharacterSet>Unicode</CharacterSet>
+    <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -78,13 +78,11 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
-    <OutDir>$(Configuration)-$(PlatformArchitecture)\</OutDir>
-    <IntDir>$(Configuration)-$(PlatformArchitecture)\$(ProjectName)\</IntDir>
+    <OutDir>$(SolutionDir)\$(Configuration)\$(Platform)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <OutDir>$(Configuration)-$(PlatformArchitecture)\</OutDir>
-    <IntDir>$(Configuration)-$(PlatformArchitecture)\$(ProjectName)\</IntDir>
+    <OutDir>$(SolutionDir)\$(Configuration)\$(Platform)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug CONSOLE|x64'">
     <LinkIncremental>true</LinkIncremental>
@@ -92,13 +90,11 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
-    <OutDir>$(Configuration)-$(PlatformArchitecture)\</OutDir>
-    <IntDir>$(Configuration)-$(PlatformArchitecture)\$(ProjectName)\</IntDir>
+    <OutDir>$(SolutionDir)\$(Configuration)\$(Platform)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <OutDir>$(Configuration)-$(PlatformArchitecture)\</OutDir>
-    <IntDir>$(Configuration)-$(PlatformArchitecture)\$(ProjectName)\</IntDir>
+    <OutDir>$(SolutionDir)\$(Configuration)\$(Platform)\</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -106,7 +102,7 @@
       </PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>NO_HTTP2;OPENSSL_API_1_0;STOP_FLAG_NEEDS_LOCK;OPENSSL_API_1_0;MG_EXPERIMENTAL_INTERFACES;USE_SERVER_STATS;USE_DUKTAPE;USE_IPV6;LUA_COMPAT_ALL;USE_LUA;USE_LUA_SQLITE3;USE_LUA_FILE_SYSTEM;USE_LUA_LUAXML;USE_WEBSOCKET;WIN32;_DEBUG;_WINDOWS;_CRT_SECURE_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NO_HTTP2;STOP_FLAG_NEEDS_LOCK;OPENSSL_API_1_0;MG_EXPERIMENTAL_INTERFACES;USE_SERVER_STATS;USE_DUKTAPE;USE_IPV6;LUA_COMPAT_ALL;USE_LUA;USE_LUA_SQLITE3;USE_LUA_FILE_SYSTEM;USE_LUA_LUAXML;USE_WEBSOCKET;WIN32;_DEBUG;_WINDOWS;_CRT_SECURE_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(ProjectDir)..\..\include;$(ProjectDir)..\..\src\third_party;$(ProjectDir)..\..\src\third_party\lua-5.2.4\src;$(ProjectDir)..\..\src\third_party\duktape-1.5.2\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -124,7 +120,7 @@
       </PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>NO_HTTP2;OPENSSL_API_1_0;USE_SERVER_STATS;USE_DUKTAPE;USE_IPV6;LUA_COMPAT_ALL;USE_LUA;USE_LUA_SQLITE3;USE_LUA_FILE_SYSTEM;USE_WEBSOCKET;WIN32;_DEBUG;_WINDOWS;_CRT_SECURE_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>OPENSSL_API_3_0;USE_SERVER_STATS;USE_DUKTAPE;USE_IPV6;LUA_COMPAT_ALL;USE_LUA;USE_LUA_SQLITE3;USE_LUA_FILE_SYSTEM;USE_WEBSOCKET;WIN32;_DEBUG;_WINDOWS;_CRT_SECURE_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(ProjectDir)..\..\include;$(ProjectDir)..\..\src\third_party;$(ProjectDir)..\..\src\third_party\lua-5.2.4\src;$(ProjectDir)..\..\src\third_party\duktape-1.5.2\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -154,7 +150,7 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>NO_HTTP2;OPENSSL_API_1_0;OPENSSL_API_1_0;MG_EXPERIMENTAL_INTERFACES;USE_SERVER_STATS;USE_DUKTAPE;USE_IPV6;LUA_COMPAT_ALL;USE_LUA;USE_LUA_SQLITE3;USE_LUA_FILE_SYSTEM;USE_LUA_LUAXML;USE_WEBSOCKET;WIN32;_WINDOWS;_CRT_SECURE_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NO_HTTP2;OPENSSL_API_1_1;MG_EXPERIMENTAL_INTERFACES;USE_SERVER_STATS;USE_DUKTAPE;USE_IPV6;LUA_COMPAT_ALL;USE_LUA;USE_LUA_SQLITE3;USE_LUA_FILE_SYSTEM;USE_LUA_LUAXML;USE_WEBSOCKET;WIN32;_WINDOWS;_CRT_SECURE_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(ProjectDir)..\..\include;$(ProjectDir)..\..\src\third_party;$(ProjectDir)..\..\src\third_party\lua-5.2.4\src;$(ProjectDir)..\..\src\third_party\duktape-1.5.2\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -164,8 +160,7 @@
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
     <PostBuildEvent>
-      <Command>
-      </Command>
+      <Command>rcedit-x86.exe $(OutDir)$(TargetName)$(TargetExt) --set-file-version 1.17 --set-product-version 1.17</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -176,7 +171,7 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>NO_HTTP2;OPENSSL_API_1_0;USE_SERVER_STATS;USE_DUKTAPE;USE_IPV6;LUA_COMPAT_ALL;USE_LUA;USE_LUA_SQLITE3;USE_LUA_FILE_SYSTEM;USE_WEBSOCKET;WIN32;_DEBUG;_WINDOWS;_CRT_SECURE_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NO_HTTP2;OPENSSL_API_1_1;MG_EXPERIMENTAL_INTERFACES;USE_SERVER_STATS;USE_DUKTAPE;USE_IPV6;LUA_COMPAT_ALL;USE_LUA;USE_LUA_SQLITE3;USE_LUA_FILE_SYSTEM;USE_LUA_LUAXML;USE_WEBSOCKET;WIN32;_WINDOWS;_CRT_SECURE_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(ProjectDir)..\..\include;$(ProjectDir)..\..\src\third_party;$(ProjectDir)..\..\src\third_party\lua-5.2.4\src;$(ProjectDir)..\..\src\third_party\duktape-1.5.2\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -185,6 +180,9 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
+    <PostBuildEvent>
+      <Command>rcedit-x86.exe $(OutDir)$(TargetName)$(TargetExt) --set-file-version 1.17 --set-product-version 1.17</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\..\include\civetweb.h" />
@@ -210,8 +208,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\src\handle_form.inl" />
+    <None Include="..\..\src\match.inl" />
     <None Include="..\..\src\md5.inl" />
-    <None Include="..\..\src\mod_http2.inl" />
+    <None Include="..\..\src\http2.inl" />
     <None Include="..\..\src\mod_lua_shared.inl" />
     <None Include="..\..\src\mod_mbedtls.inl" />
     <None Include="..\..\src\openssl_dl.inl" />
@@ -220,8 +219,8 @@
     <None Include="..\..\src\sha1.inl" />
     <None Include="..\..\src\mod_duktape.inl" />
     <None Include="..\..\src\mod_lua.inl" />
+    <None Include="..\..\src\sort.inl" />
     <None Include="..\..\src\timer.inl" />
-    <None Include="..\..\src\wolfssl_extras.inl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
