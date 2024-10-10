@@ -5,7 +5,7 @@ cmake_policy(SET CMP0054 NEW)
 cmake_policy(SET CMP0057 NEW)
 
 # Set up the project
-project (civetweb)
+project (civetweb VERSION 1.16.0)
 
 # Detect the platform reliably
 if(ZEPHYR_BASE)
@@ -37,7 +37,7 @@ include(AddCXXCompilerFlag)
 include(DetermineTargetArchitecture)
 include(CMakeDependentOption)
 
-set(CIVETWEB_VERSION "1.15.0" CACHE STRING "The version of the civetweb library")
+set(CIVETWEB_VERSION "1.16.0" CACHE STRING "The version of the civetweb library")
 string(REGEX MATCH "([0-9]+)\\.([0-9]+)\\.([0-9]+)" CIVETWEB_VERSION_MATCH "${CIVETWEB_VERSION}")
 if ("${CIVETWEB_VERSION_MATCH}" STREQUAL "")
   message(FATAL_ERROR "Must specify a semantic version: major.minor.patch")
@@ -79,6 +79,10 @@ message(STATUS "Disable caching support - ${CIVETWEB_DISABLE_CACHING}")
 # C++ wrappers
 option(CIVETWEB_ENABLE_CXX "Enables the C++ wrapper library" OFF)
 message(STATUS "C++ wrappers - ${CIVETWEB_ENABLE_CXX}")
+
+# HTTP2 Support
+option(CIVETWEB_ENABLE_HTTP2 "Enables HTTP2 support" OFF)
+message(STATUS "Use HTPP2 - ${CIVETWEB_ENABLE_HTTP2}")
 
 # IP Version 6
 option(CIVETWEB_ENABLE_IPV6 "Enables the IP version 6 support" ON)
@@ -184,7 +188,7 @@ if (CIVETWEB_ENABLE_LUA)
   mark_as_advanced(CIVETWEB_LUA_SQLITE_VERSION)
 
   # Lua SQLite Verification Hash
-  set(CIVETWEB_LUA_SQLITE_MD5_HASH 43234ae08197dfce6da02482ed14ec92 CACHE STRING
+  set(CIVETWEB_LUA_SQLITE_MD5_HASH ff7abd4aa8bd549eb18298fb954612f8 CACHE STRING
     "The hash of Lua SQLite archive to be downloaded")
   set_property(CACHE CIVETWEB_LUA_SQLITE_MD5_HASH PROPERTY VALUE ${CIVETWEB_LUA_SQLITE_MD5_HASH})
   mark_as_advanced(CIVETWEB_LUA_SQLITE_MD5_HASH)
@@ -496,6 +500,9 @@ if (${CMAKE_BUILD_TYPE} MATCHES "[Dd]ebug")
   add_definitions(-O0)
   add_definitions(-g)
 endif()
+if (CIVETWEB_ENABLE_HTTP2)
+  add_definitions(-DUSE_HTTP2)
+endif()
 if (CIVETWEB_ENABLE_IPV6)
   add_definitions(-DUSE_IPV6)
 endif()
@@ -699,4 +706,3 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "${CPACK_PACKAGE_DEPENDS}")
 
 # Finalize CPack settings
 include(CPack)
-

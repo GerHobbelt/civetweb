@@ -1551,11 +1551,13 @@ static void mg_snprintf(const struct mg_connection *conn,
 #if defined(vsnprintf)
 #undef vsnprintf
 #endif
+#if !defined(NDEBUG)
 #define malloc DO_NOT_USE_THIS_FUNCTION__USE_mg_malloc
 #define calloc DO_NOT_USE_THIS_FUNCTION__USE_mg_calloc
 #define realloc DO_NOT_USE_THIS_FUNCTION__USE_mg_realloc
 #define free DO_NOT_USE_THIS_FUNCTION__USE_mg_free
 #define snprintf DO_NOT_USE_THIS_FUNCTION__USE_mg_snprintf
+#endif
 #if defined(_WIN32)
 /* vsnprintf must not be used in any system,
  * but this define only works well for Windows. */
@@ -6245,13 +6247,18 @@ push_inner(struct mg_context *ctx,
 			/* For sockets, wait for the socket using poll */
 			struct mg_pollfd pfd[2];
 			int pollres;
+			unsigned int num_sock = 1;
 
 			pfd[0].fd = sock;
 			pfd[0].events = POLLOUT;
 
-			pfd[1].fd = ctx->thread_shutdown_notification_socket;
-			pfd[1].events = POLLIN;
-			pollres = mg_poll(pfd, 2, (int)(ms_wait), &(ctx->stop_flag), 1);
+			if (ctx->context_type == CONTEXT_SERVER) {
+				pfd[num_sock].fd = ctx->thread_shutdown_notification_socket;
+				pfd[num_sock].events = POLLIN;
+				num_sock++;
+			}
+
+			pollres = mg_poll(pfd, num_sock, (int)(ms_wait), &(ctx->stop_flag));
 			if (!STOP_FLAG_IS_ZERO(&ctx->stop_flag)) {
 				return -2;
 			}
@@ -6424,7 +6431,7 @@ pull_inner(FILE *fp,
 		struct mg_pollfd pfd[2];
 		int to_read;
 		int pollres;
-		int client_is_ready_for_read = 0;
+		unsigned int num_sock = 1;
 
 		to_read = mbedtls_ssl_get_bytes_avail(conn->ssl);
 
@@ -6437,16 +6444,23 @@ pull_inner(FILE *fp,
 			if (to_read > len)
 				to_read = len;
 		} else {
-			unsigned int num_pfds;
-			struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLIN);
+			pfd[0].fd = conn->client.sock;
+			pfd[0].events = POLLIN;
+
+			if (conn->phys_ctx->context_type == CONTEXT_SERVER) {
+				pfd[num_sock].fd =
+				    conn->phys_ctx->thread_shutdown_notification_socket;
+				pfd[num_sock].events = POLLIN;
+				num_sock++;
+			}
 
 			to_read = len;
 
-			pollres = pfds ? mg_poll(pfd,
-			                  num_pfds,
+			pollres = mg_poll(pfd,
+			                  num_sock,
 			                  (int)(timeout * 1000.0),
-			                  &(conn->phys_ctx->stop_flag),
-			                  1) : -1;
+			                  &(conn->phys_ctx->stop_flag));
+
 			if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
 				return -2;
 			}
@@ -6483,8 +6497,9 @@ pull_inner(FILE *fp,
 #elif !defined(NO_SSL)
 	} else if (conn->ssl != NULL) {
 		int ssl_pending;
+		struct mg_pollfd pfd[2];
 		int pollres;
-		int client_is_ready_for_read = 0;
+		unsigned int num_sock = 1;
 
 		if ((ssl_pending = SSL_pending(conn->ssl)) > 0) {
 			/* We already know there is no more data buffered in conn->buf
@@ -6495,25 +6510,25 @@ pull_inner(FILE *fp,
 			}
 			pollres = 1;
 		} else {
-			unsigned int num_pfds;
-			struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLIN);
-			pollres = pfd ? mg_poll(pfd,
-			                  num_pfds,
-			                  (int)(timeout * 1000.0),
-			                  &(conn->phys_ctx->stop_flag),
-			                  1) : -1;
-			if (pollres > 0) {
-				if (mg_dispatch_misc_socket_callbacks(conn) == 0) {
-					return -2;
-				}
-				client_is_ready_for_read = ((pfd[0].revents & POLLIN) != 0);
+			pfd[0].fd = conn->client.sock;
+			pfd[0].events = POLLIN;
+
+			if (conn->phys_ctx->context_type == CONTEXT_SERVER) {
+				pfd[num_sock].fd =
+				    conn->phys_ctx->thread_shutdown_notification_socket;
+				pfd[num_sock].events = POLLIN;
+				num_sock++;
 			}
 
+			pollres = mg_poll(pfd,
+			                  num_sock,
+			                  (int)(timeout * 1000.0),
+			                  &(conn->phys_ctx->stop_flag));
 			if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
 				return -2;
 			}
 		}
-		if (client_is_ready_for_read) {
+		if (pollres > 0) {
 			ERR_clear_error();
 			nread =
 			    SSL_read(conn->ssl, buf, (ssl_pending > 0) ? ssl_pending : len);
@@ -6544,15 +6559,24 @@ pull_inner(FILE *fp,
 #endif
 
 	} else {
+		struct mg_pollfd pfd[2];
 		int pollres;
+		unsigned int num_sock = 1;
 
-		unsigned int num_pfds;
-		struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLIN);
-		pollres = pfd ? mg_poll(pfd,
-		                  num_pfds,
+		pfd[0].fd = conn->client.sock;
+		pfd[0].events = POLLIN;
+
+		if (conn->phys_ctx->context_type == CONTEXT_SERVER) {
+			pfd[num_sock].fd =
+			    conn->phys_ctx->thread_shutdown_notification_socket;
+			pfd[num_sock].events = POLLIN;
+			num_sock++;
+		}
+
+		pollres = mg_poll(pfd,
+		                  num_sock,
 		                  (int)(timeout * 1000.0),
-		                  &(conn->phys_ctx->stop_flag),
-		                  1) : -1;
+		                  &(conn->phys_ctx->stop_flag));
 		if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
 			return -2;
 		}
@@ -6580,7 +6604,7 @@ pull_inner(FILE *fp,
 		}
 	}
 
-	if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
+	if (conn != NULL && !STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
 		return -2;
 	}
 
@@ -6604,7 +6628,7 @@ pull_inner(FILE *fp,
 			/* See https://www.chilkatsoft.com/p/p_299.asp */
 			return -2;
 		} else {
-			DEBUG_TRACE("recv() failed, error %d", err);
+			DEBUG_TRACE("read()/recv() failed, error %d", err);
 			return -2;
 		}
 #else
@@ -6626,7 +6650,7 @@ pull_inner(FILE *fp,
 			 * (see signal(7)).
 			 * => stay in the while loop */
 		} else {
-			DEBUG_TRACE("recv() failed, error %d", err);
+			DEBUG_TRACE("read()/recv() failed, error %d", err);
 			return -2;
 		}
 #endif
@@ -8815,7 +8839,7 @@ open_auth_file(struct mg_connection *conn,
 
 
 /* Parsed Authorization header */
-struct ah {
+struct auth_header {
 	char *user;
 	int type;             /* 1 = basic, 2 = digest */
 	char *plain_password; /* Basic only */
@@ -8823,32 +8847,32 @@ struct ah {
 };
 
 
-/* Return 1 on success. Always initializes the ah structure. */
+/* Return 1 on success. Always initializes the auth_header structure. */
 static int
 parse_auth_header(struct mg_connection *conn,
                   char *buf,
                   size_t buf_size,
-                  struct ah *ah)
+                  struct auth_header *auth_header)
 {
 	char *name, *value, *s;
-	const char *auth_header;
+	const char *ah;
 	uint64_t nonce;
 
-	if (!ah || !conn) {
+	if (!auth_header || !conn) {
 		return 0;
 	}
 
-	(void)memset(ah, 0, sizeof(*ah));
-	auth_header = mg_get_header(conn, "Authorization");
+	(void)memset(auth_header, 0, sizeof(*auth_header));
+	ah = mg_get_header(conn, "Authorization");
 
-	if (auth_header == NULL) {
+	if (ah == NULL) {
 		/* No Authorization header at all */
 		return 0;
 	}
-	if (0 == mg_strncasecmp(auth_header, "Basic ", 6)) {
+	if (0 == mg_strncasecmp(ah, "Basic ", 6)) {
 		/* Basic Auth (we never asked for this, but some client may send it) */
 		char *split;
-		const char *userpw_b64 = auth_header + 6;
+		const char *userpw_b64 = ah + 6;
 		size_t userpw_b64_len = strlen(userpw_b64);
 		size_t buf_len_r = buf_size;
 		if (mg_base64_decode(
@@ -8865,15 +8889,15 @@ parse_auth_header(struct mg_connection *conn,
 		*split = 0;
 
 		/* User name is before ':', Password is after ':'  */
-		ah->user = buf;
-		ah->type = 1;
-		ah->plain_password = split + 1;
+		auth_header->user = buf;
+		auth_header->type = 1;
+		auth_header->plain_password = split + 1;
 
 		return 1;
 
-	} else if (0 == mg_strncasecmp(auth_header, "Digest ", 7)) {
+	} else if (0 == mg_strncasecmp(ah, "Digest ", 7)) {
 		/* Digest Auth ... implemented below */
-		ah->type = 2;
+		auth_header->type = 2;
 
 	} else {
 		/* Unknown or invalid Auth method */
@@ -8881,7 +8905,7 @@ parse_auth_header(struct mg_connection *conn,
 	}
 
 	/* Make modifiable copy of the auth header */
-	(void)mg_strlcpy(buf, auth_header + 7, buf_size);
+	(void)mg_strlcpy(buf, ah + 7, buf_size);
 	s = buf;
 
 	/* Parse authorization header */
@@ -8908,29 +8932,29 @@ parse_auth_header(struct mg_connection *conn,
 		}
 
 		if (!strcmp(name, "username")) {
-			ah->user = value;
+			auth_header->user = value;
 		} else if (!strcmp(name, "cnonce")) {
-			ah->cnonce = value;
+			auth_header->cnonce = value;
 		} else if (!strcmp(name, "response")) {
-			ah->response = value;
+			auth_header->response = value;
 		} else if (!strcmp(name, "uri")) {
-			ah->uri = value;
+			auth_header->uri = value;
 		} else if (!strcmp(name, "qop")) {
-			ah->qop = value;
+			auth_header->qop = value;
 		} else if (!strcmp(name, "nc")) {
-			ah->nc = value;
+			auth_header->nc = value;
 		} else if (!strcmp(name, "nonce")) {
-			ah->nonce = value;
+			auth_header->nonce = value;
 		}
 	}
 
 #if !defined(NO_NONCE_CHECK)
 	/* Read the nonce from the response. */
-	if (ah->nonce == NULL) {
+	if (auth_header->nonce == NULL) {
 		return 0;
 	}
 	s = NULL;
-	nonce = strtoull(ah->nonce, &s, 10);
+	nonce = strtoull(auth_header->nonce, &s, 10);
 	if ((s == NULL) || (*s != 0)) {
 		return 0;
 	}
@@ -8961,7 +8985,7 @@ parse_auth_header(struct mg_connection *conn,
 	(void)nonce;
 #endif
 
-	return (ah->user != NULL);
+	return (auth_header->user != NULL);
 }
 
 
@@ -8993,7 +9017,7 @@ mg_fgets(char *buf, size_t size, struct mg_file *filep)
 #if !defined(NO_FILESYSTEMS)
 struct read_auth_file_struct {
 	struct mg_connection *conn;
-	struct ah ah;
+	struct auth_header auth_header;
 	const char *domain;
 	char buf[256 + 256 + 40];
 	const char *f_user;
@@ -9094,9 +9118,9 @@ read_auth_file(struct mg_file *filep,
 		*(char *)(workdata->f_ha1) = 0;
 		(workdata->f_ha1)++;
 
-		if (!strcmp(workdata->ah.user, workdata->f_user)
+		if (!strcmp(workdata->auth_header.user, workdata->f_user)
 		    && !strcmp(workdata->domain, workdata->f_domain)) {
-			switch (workdata->ah.type) {
+			switch (workdata->auth_header.type) {
 			case 1: /* Basic */
 			{
 				char md5[33];
@@ -9105,7 +9129,7 @@ read_auth_file(struct mg_file *filep,
 				       ":",
 				       workdata->domain,
 				       ":",
-				       workdata->ah.plain_password,
+				       workdata->auth_header.plain_password,
 				       NULL);
 				return 0 == memcmp(workdata->f_ha1, md5, 33);
 			}
@@ -9113,12 +9137,12 @@ read_auth_file(struct mg_file *filep,
 				return check_password_digest(
 				    workdata->conn->request_info.request_method,
 				    workdata->f_ha1,
-				    workdata->ah.uri,
-				    workdata->ah.nonce,
-				    workdata->ah.nc,
-				    workdata->ah.cnonce,
-				    workdata->ah.qop,
-				    workdata->ah.response);
+				    workdata->auth_header.uri,
+				    workdata->auth_header.nonce,
+				    workdata->auth_header.nc,
+				    workdata->auth_header.cnonce,
+				    workdata->auth_header.qop,
+				    workdata->auth_header.response);
 			default: /* None/Other/Unknown */
 				return 0;
 			}
@@ -9143,13 +9167,13 @@ authorize(struct mg_connection *conn, struct mg_file *filep, const char *realm)
 	memset(&workdata, 0, sizeof(workdata));
 	workdata.conn = conn;
 
-	if (!parse_auth_header(conn, buf, sizeof(buf), &workdata.ah)) {
+	if (!parse_auth_header(conn, buf, sizeof(buf), &workdata.auth_header)) {
 		return 0;
 	}
 
 	/* CGI needs it as REMOTE_USER */
 	conn->request_info.remote_user =
-	    mg_strdup_ctx(workdata.ah.user, conn->phys_ctx);
+	    mg_strdup_ctx(workdata.auth_header.user, conn->phys_ctx);
 
 	if (realm) {
 		workdata.domain = realm;
@@ -10426,8 +10450,11 @@ send_file_data(struct mg_connection *conn,
 				}
 
 				/* Read from file, exit the loop on error */
-				if ((num_read =
-				         (int)fread(buf, 1, (size_t)to_read, filep->access.fp))
+				if ((num_read = pull_inner(filep->access.fp,
+				                           NULL,
+				                           buf,
+				                           to_read,
+				                           /* unused */ 0.0))
 				    <= 0) {
 					break;
 				}
@@ -11060,7 +11087,7 @@ parse_http_headers(char **buf, struct mg_header hdr[MG_MAX_HEADERS])
 		}
 
 		/* here *dp is either 0 or '\n' */
-		/* in any case, we have a new header */
+		/* in any case, we have found a complete header */
 		num_headers = i + 1;
 
 		if (*dp) {
@@ -11069,9 +11096,11 @@ parse_http_headers(char **buf, struct mg_header hdr[MG_MAX_HEADERS])
 			*buf = dp;
 
 			if ((dp[0] == '\r') || (dp[0] == '\n')) {
-				/* This is the end of the header */
+				/* We've had CRLF twice in a row
+				 * This is the end of the headers */
 				break;
 			}
+			/* continue within the loop, find the next header */
 		} else {
 			*buf = dp;
 			break;
@@ -16888,24 +16917,26 @@ sslize(struct mg_connection *conn,
 					/* Need to retry the function call "later".
 					 * See https://linux.die.net/man/3/ssl_get_error
 					 * This is typical for non-blocking sockets. */
-
+					struct mg_pollfd pfd[2];
 					int pollres;
-					short primary_fd_events = ((err == SSL_ERROR_WANT_CONNECT)
-					                || (err == SSL_ERROR_WANT_WRITE))
-					                   ? POLLOUT
-					                   : POLLIN;
-					unsigned int num_pfds;
-					struct mg_pollfd * pfd =
-					     mg_get_poll_fds_for_connection(conn, &num_pfds, primary_fd_events);
+					unsigned int num_sock = 1;
+					pfd[0].fd = conn->client.sock;
+					pfd[0].events = ((err == SSL_ERROR_WANT_CONNECT)
+					                 || (err == SSL_ERROR_WANT_WRITE))
+					                    ? POLLOUT
+					                    : POLLIN;
 
-					if (pfd == NULL) {
-						mg_cry_internal(conn, "%s: SSL mg_get_poll_fds_for_connection() failed", __func__);
-						break;
+					if (conn->phys_ctx->context_type == CONTEXT_SERVER) {
+						pfd[num_sock].fd =
+						    conn->phys_ctx->thread_shutdown_notification_socket;
+						pfd[num_sock].events = POLLIN;
+						num_sock++;
 					}
 
-					pollres =
-					    mg_poll(pfd, num_pfds, 50, &(conn->phys_ctx->stop_flag), 1);
-
+					pollres = mg_poll(pfd,
+					                  num_sock,
+					                  50,
+					                  &(conn->phys_ctx->stop_flag));
 					if (pollres < 0) {
 						/* Break if error occurred (-1)
 						 * or server shutdown (-2) */
