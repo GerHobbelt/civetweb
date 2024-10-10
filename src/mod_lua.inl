@@ -641,7 +641,10 @@ run_lsp_kepler(struct mg_connection *conn,
 		/* Only send a HTML header, if this is the top level page.
 		 * If this page is included by some mg.include calls, do not add a
 		 * header. */
-		mg_printf(conn, "HTTP/1.1 200 OK\r\n");
+		if(conn->status_code < 0)
+			mg_printf(conn, "HTTP/1.1 200 OK\r\n");
+		else
+			mg_printf(conn, "HTTP/1.1 %d %s\r\n", conn->status_code, mg_get_response_code_text(conn, conn->status_code));
 		send_no_cache_header(conn);
 		send_additional_header(conn);
 		mg_printf(conn,
@@ -3679,7 +3682,7 @@ lua_init_optional_libraries(void)
 	lua_shared_init();
 
 /* UUID library */
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(NO_DLOPEN)
 	lib_handle_uuid = dlopen("libuuid.so", RTLD_LAZY);
 	pf_uuid_generate.p =
 	    (lib_handle_uuid ? dlsym(lib_handle_uuid, "uuid_generate") : 0);
@@ -3693,7 +3696,7 @@ static void
 lua_exit_optional_libraries(void)
 {
 /* UUID library */
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(NO_DLOPEN)
 	if (lib_handle_uuid) {
 		dlclose(lib_handle_uuid);
 	}

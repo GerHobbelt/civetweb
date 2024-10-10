@@ -1551,11 +1551,13 @@ static void mg_snprintf(const struct mg_connection *conn,
 #if defined(vsnprintf)
 #undef vsnprintf
 #endif
+#if !defined(NDEBUG)
 #define malloc DO_NOT_USE_THIS_FUNCTION__USE_mg_malloc
 #define calloc DO_NOT_USE_THIS_FUNCTION__USE_mg_calloc
 #define realloc DO_NOT_USE_THIS_FUNCTION__USE_mg_realloc
 #define free DO_NOT_USE_THIS_FUNCTION__USE_mg_free
 #define snprintf DO_NOT_USE_THIS_FUNCTION__USE_mg_snprintf
+#endif
 #if defined(_WIN32)
 /* vsnprintf must not be used in any system,
  * but this define only works well for Windows. */
@@ -10979,7 +10981,7 @@ parse_http_headers(char **buf, struct mg_header hdr[MG_MAX_HEADERS])
 		}
 
 		/* here *dp is either 0 or '\n' */
-		/* in any case, we have a new header */
+		/* in any case, we have found a complete header */
 		num_headers = i + 1;
 
 		if (*dp) {
@@ -10988,9 +10990,11 @@ parse_http_headers(char **buf, struct mg_header hdr[MG_MAX_HEADERS])
 			*buf = dp;
 
 			if ((dp[0] == '\r') || (dp[0] == '\n')) {
-				/* This is the end of the header */
+				/* We've had CRLF twice in a row
+				 * This is the end of the headers */
 				break;
 			}
+			/* continue within the loop, find the next header */
 		} else {
 			*buf = dp;
 			break;
