@@ -20559,7 +20559,7 @@ master_thread_run(struct mg_context *ctx)
 
 	if (ctx->callbacks.init_thread) {
 		/* Callback for the master thread (type 0) */
-		tls.user_ptr = ctx->callbacks.init_thread(ctx, 0);
+		tls.user_ptr = ctx->callbacks.init_thread(ctx, 0);  // MG_ENTER_MASTER
 	} else {
 		tls.user_ptr = NULL;
 	}
@@ -20702,7 +20702,7 @@ master_thread_run(struct mg_context *ctx)
 	/* call exit thread callback */
 	if (ctx->callbacks.exit_thread) {
 		/* Callback for the master thread (type 0) */
-		ctx->callbacks.exit_thread(ctx, 0, tls.user_ptr);
+		ctx->callbacks.exit_thread(ctx, 0, tls.user_ptr);  // MG_EXIT_MASTER
 	}
 
 #if defined(_WIN32)

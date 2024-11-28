@@ -34,6 +34,17 @@ struct socket;          // Handle for the socket related to a client / server co
 struct fd_set;
 typedef struct fd_set fd_set;
 
+// The IP address: IPv4 or IPv6
+struct mg_ip_address {
+	unsigned is_ip6 : 1; // flag: 1: struct contains an IPv6 address, 0: IPv4 address
+	union {
+		// these are in 'network order', i.e. 127.0.0.1 would give v4[0] == 127
+		// and v[3] == 1
+		unsigned short int v4[4];
+		unsigned short int v6[8];
+	} ip_addr;
+};
+
 int64_t mg_get_num_bytes_sent(struct mg_connection *conn);
 int64_t mg_get_num_bytes_received(struct mg_connection *conn);
 
@@ -67,7 +78,6 @@ remote = 0 will print the local IP address
 Return 0 on success, non-zero on error.
 */
 int mg_get_socket_ip_address(struct mg_ip_address *dst, const struct mg_connection *conn, int remote);
-
 
 // Disable or enable the Nagle algorithm on a socket.
 int mg_set_nodelay_mode(struct mg_connection *conn, int on);
