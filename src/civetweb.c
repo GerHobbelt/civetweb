@@ -4572,7 +4572,7 @@ mg_send_http_error_impl(struct mg_connection *conn,
 	if (!handled_by_callback) {
 		/* Check for recursion */
 		if (conn->in_error_handler) {
-			DEBUG_TRACE(
+			mg_cry_internal(conn, 
 			    "Recursion when handling error %u - fall back to default",
 			    status);
 #if !defined(NO_FILESYSTEMS)
@@ -4695,7 +4695,7 @@ mg_send_http_error_impl(struct mg_connection *conn,
 
 		} else {
 			/* No body allowed. Close the connection. */
-			DEBUG_TRACE("Error %i", status);
+			mg_cry_internal(conn, "Error %i - No body allowed. Close the connection.", status);
 		}
 	}
 	return 0;
@@ -5493,7 +5493,7 @@ mg_join_thread(pthread_t threadid)
 	result = -1;
 	dwevent = WaitForSingleObject(threadid, (DWORD)INFINITE);
 	if (dwevent == WAIT_FAILED) {
-		DEBUG_TRACE("WaitForSingleObject() failed, error %d", ERRNO);
+		mg_cry_internal(conn, "WaitForSingleObject() failed, error %d", ERRNO);
 	} else {
 		if (dwevent == WAIT_OBJECT_0) {
 			CloseHandle(threadid);
@@ -5757,7 +5757,7 @@ spawn_process(struct mg_connection *conn,
 	                   &pi)
 	    == 0) {
 		mg_cry_internal(
-		    conn, "%s: CreateProcess(%s): %ld", __func__, cmdline, (long)ERRNO);
+		    conn, "CreateProcess(%s): %ld", cmdline, (long)ERRNO);
 		pi.hProcess = (pid_t)-1;
 		/* goto spawn_cleanup; */
 	}
@@ -5836,8 +5836,7 @@ set_close_on_exec(int fd,
 		if (conn || ctx) {
 			struct mg_connection fc;
 			mg_cry_internal((conn ? conn : fake_connection(&fc, ctx)),
-			                "%s: fcntl(F_SETFD FD_CLOEXEC) failed: %s",
-			                __func__,
+			                "fcntl(F_SETFD FD_CLOEXEC) failed: %s",
 			                strerror(ERRNO));
 		}
 	}
@@ -5931,7 +5930,7 @@ spawn_process(struct mg_connection *conn,
 
 	if ((pid = fork()) == -1) {
 		/* Parent */
-		mg_cry_internal(conn, "%s: fork(): %s", __func__, strerror(ERRNO));
+		mg_cry_internal(conn, "fork(): %s", strerror(ERRNO));
 	} else if (pid != 0) {
 		/* Make sure children close parent-side descriptors.
 		 * The caller will close the child-side immediately. */
@@ -5942,23 +5941,20 @@ spawn_process(struct mg_connection *conn,
 		/* Child */
 		if (chdir(dir) != 0) {
 			mg_cry_internal(
-			    conn, "%s: chdir(%s): %s", __func__, dir, strerror(ERRNO));
+			    conn, "chdir(%s): %s", dir, strerror(ERRNO));
 		} else if (dup2(fdin[0], 0) == -1) {
 			mg_cry_internal(conn,
-			                "%s: dup2(%d, 0): %s",
-			                __func__,
+			                "dup2(%d, 0): %s",
 			                fdin[0],
 			                strerror(ERRNO));
 		} else if (dup2(fdout[1], 1) == -1) {
 			mg_cry_internal(conn,
-			                "%s: dup2(%d, 1): %s",
-			                __func__,
+			                "dup2(%d, 1): %s",
 			                fdout[1],
 			                strerror(ERRNO));
 		} else if (dup2(fderr[1], 2) == -1) {
 			mg_cry_internal(conn,
-			                "%s: dup2(%d, 2): %s",
-			                __func__,
+			                "dup2(%d, 2): %s",
 			                fderr[1],
 			                strerror(ERRNO));
 		} else {
@@ -5990,8 +5986,7 @@ spawn_process(struct mg_connection *conn,
 				/* no interpreter configured, call the program directly */
 				(void)execle(prog, prog, NULL, envp);
 				mg_cry_internal(conn,
-				                "%s: execle(%s): %s",
-				                __func__,
+				                "execle(%s): %s",
 				                prog,
 				                strerror(ERRNO));
 			} else {
@@ -6006,8 +6001,7 @@ spawn_process(struct mg_connection *conn,
 					(void)execle(interp, interp, prog, NULL, envp);
 				}
 				mg_cry_internal(conn,
-				                "%s: execle(%s %s): %s",
-				                __func__,
+				                "execle(%s %s): %s",
 				                interp,
 				                prog,
 				                strerror(ERRNO));
@@ -6195,7 +6189,7 @@ push_inner(struct mg_context *ctx,
 				    || n == MBEDTLS_ERR_SSL_ASYNC_IN_PROGRESS) {
 					n = 0;
 				} else {
-					fprintf(stderr, "SSL write failed, error %d\n", n);
+					mg_cry_internal(conn, "SSL write failed, error %d", n);
 					return -2;
 				}
 			} else {
@@ -6214,7 +6208,7 @@ push_inner(struct mg_context *ctx,
 				           || (err == SSL_ERROR_WANT_WRITE)) {
 					n = 0;
 				} else {
-					DEBUG_TRACE("SSL_write() failed, error %d", err);
+					mg_cry_internal(conn, "SSL_write() failed, error %d", err);
 					ERR_clear_error();
 					return -2;
 				}
@@ -6256,7 +6250,7 @@ push_inner(struct mg_context *ctx,
 		}
 		if (n < 0) {
 			/* socket error - check errno */
-			DEBUG_TRACE("send() failed, error %d", err);
+			mg_cry_internal(conn, "send() failed, error %d", err);
 
 			/* TODO (mid): error handling depending on the error code.
 			 * These codes are different between Windows and Linux.
@@ -6282,7 +6276,7 @@ push_inner(struct mg_context *ctx,
 			unsigned int num_pfds;
 			struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLOUT);
 			if (pfd == NULL) {
-				mg_cry_internal(conn, "%s: SSL mg_get_poll_fds_for_connection() failed", __func__);
+				mg_cry_internal(conn, "SSL mg_get_poll_fds_for_connection() failed");
 				return -2;
 			}
 
@@ -6440,10 +6434,10 @@ mg_dispatch_misc_socket_callbacks(struct mg_connection * conn)
 	int ret = 1;  /* defaults to success */
 	const struct mg_pollfd * pfd = conn->custom_mg_poll_fds_array;
 	const struct mg_misc_socket_callback * cb = conn->misc_socket_callbacks;
-	if ((pfd)&&(cb)) {
+	if ((pfd) && (cb)) {
 		pfd += 2;  /* the first two pfds are always handled internally, so we skip them here */
 
-		for (unsigned int i=0; i<conn->num_misc_socket_callbacks; i++) {
+		for (unsigned int i = 0; i < conn->num_misc_socket_callbacks; i++) {
 			if (pfd[i].revents != 0) {
 				ret &= cb[i].handler_callback(conn, pfd[i].fd, pfd[i].revents);
 			}
@@ -6511,7 +6505,7 @@ pull_inner(FILE *fp,
 			unsigned int num_pfds;
 			struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLIN);
 			if (pfd == NULL) {
-				mg_cry_internal(conn, "%s: SSL mg_get_poll_fds_for_connection() failed", __func__);
+				mg_cry_internal(conn, "SSL mg_get_poll_fds_for_connection() failed");
 				return -2;
 			}
 
@@ -6545,7 +6539,7 @@ pull_inner(FILE *fp,
 				    || nread == MBEDTLS_ERR_SSL_ASYNC_IN_PROGRESS) {
 					nread = 0;
 				} else {
-					fprintf(stderr, "SSL read failed, error %d\n", nread);
+					mg_cry_internal(conn, "SSL read failed, error %d", nread);
 					return -2;
 				}
 			} else {
@@ -6573,7 +6567,7 @@ pull_inner(FILE *fp,
 			unsigned int num_pfds;
 			struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLIN);
 			if (pfd == NULL) {
-				mg_cry_internal(conn, "%s: SSL mg_get_poll_fds_for_connection() failed", __func__);
+				mg_cry_internal(conn, "SSL mg_get_poll_fds_for_connection() failed");
 				return -2;
 			}
 
@@ -6608,7 +6602,7 @@ pull_inner(FILE *fp,
 					nread = 0;
 				} else {
 					/* All errors should return -2 */
-					DEBUG_TRACE("SSL_read() failed, error %d", err);
+					mg_cry_internal(conn, "SSL_read() failed, error %d", err);
 					ERR_clear_error();
 					return -2;
 				}
@@ -6627,7 +6621,7 @@ pull_inner(FILE *fp,
 		unsigned int num_pfds;
 		struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLIN);
 		if (pfd == NULL) {
-			mg_cry_internal(conn, "%s: SSL mg_get_poll_fds_for_connection() failed", __func__);
+			mg_cry_internal(conn, "SSL mg_get_poll_fds_for_connection() failed");
 			return -2;
 		}
 
@@ -6687,7 +6681,7 @@ pull_inner(FILE *fp,
 			/* See https://www.chilkatsoft.com/p/p_299.asp */
 			return -2;
 		} else {
-			DEBUG_TRACE("read()/recv() failed, error %d", err);
+			mg_cry_internal(conn, "read()/recv() failed, error %d", err);
 			return -2;
 		}
 #else
@@ -6709,7 +6703,7 @@ pull_inner(FILE *fp,
 			 * (see signal(7)).
 			 * => stay in the while loop */
 		} else {
-			DEBUG_TRACE("read()/recv() failed, error %d", err);
+			mg_cry_internal(conn, "read()/recv() failed, error %d", err);
 			return -2;
 		}
 #endif
@@ -9140,8 +9134,7 @@ read_auth_file(struct mg_file *filep,
 					}
 				} else {
 					mg_cry_internal(workdata->conn,
-					                "%s: cannot open authorization file: %s",
-					                __func__,
+					                "cannot open authorization file: %s",
 					                workdata->buf);
 				}
 				continue;
@@ -9149,8 +9142,7 @@ read_auth_file(struct mg_file *filep,
 			/* everything is invalid for the moment (might change in the
 			 * future) */
 			mg_cry_internal(workdata->conn,
-			                "%s: syntax error in authorization file: %s",
-			                __func__,
+			                "syntax error in authorization file: %s",
 			                workdata->buf);
 			continue;
 		}
@@ -9158,8 +9150,7 @@ read_auth_file(struct mg_file *filep,
 		workdata->f_domain = strchr(workdata->f_user, ':');
 		if (workdata->f_domain == NULL) {
 			mg_cry_internal(workdata->conn,
-			                "%s: syntax error in authorization file: %s",
-			                __func__,
+			                "syntax error in authorization file: %s",
 			                workdata->buf);
 			continue;
 		}
@@ -9169,8 +9160,7 @@ read_auth_file(struct mg_file *filep,
 		workdata->f_ha1 = strchr(workdata->f_domain, ':');
 		if (workdata->f_ha1 == NULL) {
 			mg_cry_internal(workdata->conn,
-			                "%s: syntax error in authorization file: %s",
-			                __func__,
+			                "syntax error in authorization file: %s",
 			                workdata->buf);
 			continue;
 		}
@@ -9298,8 +9288,7 @@ check_authorization(struct mg_connection *conn, const char *path)
 			if (truncated
 			    || !mg_fopen(conn, fname, MG_FOPEN_MODE_READ, &file)) {
 				mg_cry_internal(conn,
-				                "%s: cannot open %s: %s",
-				                __func__,
+				                "cannot open %s: %s",
 				                fname,
 				                strerror(errno));
 			}
@@ -10184,8 +10173,7 @@ scan_directory(struct mg_connection *conn,
 
 			if (!mg_stat(conn, path, &de.file)) {
 				mg_cry_internal(conn,
-				                "%s: mg_stat(%s) failed: %s",
-				                __func__,
+				                "mg_stat(%s) failed: %s",
 				                path,
 				                strerror(ERRNO));
 			}
@@ -10242,8 +10230,7 @@ remove_directory(struct mg_connection *conn, const char *dir)
 
 			if (!mg_stat(conn, path, &de.file)) {
 				mg_cry_internal(conn,
-				                "%s: mg_stat(%s) failed: %s",
-				                __func__,
+				                "mg_stat(%s) failed: %s",
 				                path,
 				                strerror(ERRNO));
 				ok = 0;
@@ -10490,8 +10477,7 @@ send_file_data(struct mg_connection *conn,
 #endif
 		if ((offset > 0) && (fseeko(filep->access.fp, offset, SEEK_SET) != 0)) {
 			mg_cry_internal(conn,
-			                "%s: fseeko() failed: %s",
-			                __func__,
+			                "fseeko() failed: %s",
 			                strerror(ERRNO));
 			mg_send_http_error(
 			    conn,
@@ -10575,8 +10561,7 @@ fclose_on_exec(struct mg_file_access *filep, struct mg_connection *conn)
 #else
 		if (fcntl(fileno(filep->fp), F_SETFD, FD_CLOEXEC) != 0) {
 			mg_cry_internal(conn,
-			                "%s: fcntl(F_SETFD FD_CLOEXEC) failed: %s",
-			                __func__,
+			                "fcntl(F_SETFD FD_CLOEXEC) failed: %s",
 			                strerror(ERRNO));
 		}
 #endif
@@ -10985,8 +10970,7 @@ remove_bad_file(const struct mg_connection *conn, const char *path)
 	int r = mg_remove(conn, path);
 	if (r != 0) {
 		mg_cry_internal(conn,
-		                "%s: Cannot remove invalid file %s",
-		                __func__,
+		                "Cannot remove invalid file %s",
 		                path);
 	}
 }
@@ -11001,7 +10985,7 @@ mg_store_body(struct mg_connection *conn, const char *path)
 	struct mg_file fi;
 
 	if (conn->consumed_content != 0) {
-		mg_cry_internal(conn, "%s: Contents already consumed", __func__);
+		mg_cry_internal(conn, "Contents already consumed");
 		return -11;
 	}
 
@@ -11667,8 +11651,7 @@ addenv(struct cgi_environment *env, const char *fmt, ...)
 
 	if ((env->varlen - env->varused) < 2) {
 		mg_cry_internal(env->conn,
-		                "%s: Cannot register CGI variable [%s]",
-		                __func__,
+		                "Cannot register CGI variable [%s]",
 		                fmt);
 		return;
 	}
@@ -11686,8 +11669,7 @@ addenv(struct cgi_environment *env, const char *fmt, ...)
 				/* Out of memory */
 				mg_cry_internal(
 				    env->conn,
-				    "%s: Cannot allocate memory for CGI variable [%s]",
-				    __func__,
+				    "Cannot allocate memory for CGI variable [%s]",
 				    fmt);
 				return;
 			}
@@ -11747,9 +11729,7 @@ prepare_cgi_environment(struct mg_connection *conn,
 	env->bufused = 0;
 	env->buf = (char *)mg_malloc_ctx(env->buflen, conn->phys_ctx);
 	if (env->buf == NULL) {
-		mg_cry_internal(conn,
-		                "%s: Not enough memory for environmental buffer",
-		                __func__);
+		mg_cry_internal(conn, "Not enough memory for environmental buffer");
 		return -1;
 	}
 	env->varlen = MAX_CGI_ENVIR_VARS;
@@ -11757,9 +11737,7 @@ prepare_cgi_environment(struct mg_connection *conn,
 	env->var =
 	    (char **)mg_malloc_ctx(env->varlen * sizeof(char *), conn->phys_ctx);
 	if (env->var == NULL) {
-		mg_cry_internal(conn,
-		                "%s: Not enough memory for environmental variables",
-		                __func__);
+		mg_cry_internal(conn, "Not enough memory for environmental variables");
 		mg_free(env->buf);
 		return -1;
 	}
@@ -11891,8 +11869,7 @@ prepare_cgi_environment(struct mg_connection *conn,
 
 		if (truncated) {
 			mg_cry_internal(conn,
-			                "%s: HTTP header variable too long [%s]",
-			                __func__,
+			                "HTTP header variable too long [%s]",
 			                conn->request_info.http_headers[i].name);
 			continue;
 		}
@@ -11951,7 +11928,7 @@ abort_cgi_process(void *data)
 		while (waitpid(proc->pid, &status, 0) != (pid_t)-1) /* nop */
 			;
 	} else {
-		DEBUG_TRACE("CGI timer: Child process %d already stopped\n", proc->pid);
+		mg_cry_internal(conn, "CGI timer: Child process %d already stopped", proc->pid);
 	}
 	/* Dec reference counter */
 	refs = mg_atomic_dec(&proc->references);
@@ -12309,8 +12286,7 @@ dav_mkcol(struct mg_connection *conn, const char *path)
 	memset(&de.file, 0, sizeof(de.file));
 	if (!mg_stat(conn, path, &de.file)) {
 		mg_cry_internal(conn,
-		                "%s: mg_stat(%s) failed: %s",
-		                __func__,
+		                "mg_stat(%s) failed: %s",
 		                path,
 		                strerror(ERRNO));
 	}
@@ -13708,7 +13684,7 @@ read_websocket(struct mg_connection *conn,
 				                         (size_t)data_len);
 				if (ret <= 0) {
 					/* Error: send failed */
-					DEBUG_TRACE("Reply PONG failed (%i)", ret);
+					mg_cry_internal(conn, "Reply PONG failed (%i)", ret);
 					break;
 				}
 
@@ -13836,7 +13812,7 @@ read_websocket(struct mg_connection *conn,
 			               timeout);
 			if (n <= -2) {
 				/* Error, no bytes read */
-				DEBUG_TRACE("PULL from %s:%u failed",
+				mg_cry_internal(conn, "PULL from %s:%u failed",
 				            conn->request_info.remote_addr,
 				            conn->request_info.remote_port);
 				break;
@@ -13850,7 +13826,7 @@ read_websocket(struct mg_connection *conn,
 				    && (!conn->must_close)) {
 					if (ping_count > MG_MAX_UNANSWERED_PING) {
 						/* Stop sending PING */
-						DEBUG_TRACE("Too many (%i) unanswered ping from %s:%u "
+						mg_cry_internal(conn, "Too many (%i) unanswered ping from %s:%u "
 						            "- closing connection",
 						            ping_count,
 						            conn->request_info.remote_addr,
@@ -13869,7 +13845,10 @@ read_websocket(struct mg_connection *conn,
 
 						if (ret <= 0) {
 							/* Error: send failed */
-							DEBUG_TRACE("Send PING failed (%i)", ret);
+							mg_cry_internal(conn, "Send PING to %s:%u failed (%i)",
+						            conn->request_info.remote_addr,
+						            conn->request_info.remote_port, 
+									ret);
 							break;
 						}
 						ping_count++;
@@ -14535,7 +14514,7 @@ get_host_from_request_info(struct vec *host, const struct mg_request_info *ri)
 			pos = strchr(host_header, ']');
 			if (!pos) {
 				/* Malformed hostname starts with '[', but no ']' found */
-				DEBUG_TRACE("%s", "Host name format error '[' without ']'");
+				mg_cry_internal(conn, "Malformed host name: format error: '[' without ']'");
 				return;
 			}
 			/* terminate after ']' */
@@ -14572,7 +14551,7 @@ switch_domain_context(struct mg_connection *conn)
 				if ((strlen(sslhost) != host.len)
 				    || mg_strncasecmp(host.ptr, sslhost, host.len)) {
 					/* Mismatch between SNI domain and HTTP domain */
-					DEBUG_TRACE("Host mismatch: SNI: %s, HTTPS: %.*s",
+					mg_cry_internal(conn, "Host mismatch: SNI: %s, HTTPS: %.*s",
 					            sslhost,
 					            (int)host.len,
 					            host.ptr);
@@ -15199,7 +15178,7 @@ handle_request(struct mg_connection *conn)
 			/* civetweb should process the request */
 		} else {
 			/* unspecified - may change with the next version */
-			DEBUG_TRACE("%s", "done (undocumented behavior)");
+			mg_cry_internal(conn, "done (undocumented behavior)");
 			return;
 		}
 	}
@@ -16694,9 +16673,7 @@ check_acl(struct mg_context *phys_ctx, const union usa *sa)
 				matched = parse_match_net(&vec, sa, 1);
 			}
 			if (matched < 0) {
-				mg_cry_ctx_internal(phys_ctx,
-				                    "%s: subnet must be [+|-]IP-addr[/x]",
-				                    __func__);
+				mg_cry_ctx_internal(phys_ctx, "subnet must be [+|-]IP-addr[/x]");
 				return -1;
 			}
 			if (matched) {
@@ -16727,8 +16704,7 @@ set_uid_option(struct mg_context *phys_ctx)
 			/* run_as_user does not exist on the system. We can't proceed
 			 * further. */
 			mg_cry_ctx_internal(phys_ctx,
-			                    "%s: unknown user [%s]",
-			                    __func__,
+			                    "unknown user [%s]",
 			                    run_as_user);
 		} else if ((run_as_user == NULL) || (curr_uid == to_pw->pw_uid)) {
 			/* There was either no request to change user, or we're already
@@ -16739,19 +16715,16 @@ set_uid_option(struct mg_context *phys_ctx)
 			/* Valid change request.  */
 			if (setgid(to_pw->pw_gid) == -1) {
 				mg_cry_ctx_internal(phys_ctx,
-				                    "%s: setgid(%s): %s",
-				                    __func__,
+				                    "setgid(%s): %s",
 				                    run_as_user,
 				                    strerror(errno));
 			} else if (setgroups(0, NULL) == -1) {
 				mg_cry_ctx_internal(phys_ctx,
-				                    "%s: setgroups(): %s",
-				                    __func__,
+				                    "setgroups(): %s",
 				                    strerror(errno));
 			} else if (setuid(to_pw->pw_uid) == -1) {
 				mg_cry_ctx_internal(phys_ctx,
-				                    "%s: setuid(%s): %s",
-				                    __func__,
+				                    "setuid(%s): %s",
 				                    run_as_user,
 				                    strerror(errno));
 			} else {
@@ -16989,11 +16962,9 @@ sslize(struct mg_connection *conn,
 					                   ? POLLOUT
 					                   : POLLIN;
 					unsigned int num_pfds;
-					struct mg_pollfd * pfd =
-					     mg_get_poll_fds_for_connection(conn, &num_pfds, primary_fd_events);
-
+					struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, primary_fd_events);
 					if (pfd == NULL) {
-						mg_cry_internal(conn, "%s: SSL mg_get_poll_fds_for_connection() failed", __func__);
+						mg_cry_internal(conn, "SSL mg_get_poll_fds_for_connection() failed");
 						break;
 					}
 
@@ -17402,8 +17373,7 @@ ssl_use_pem_file(struct mg_context *phys_ctx,
 {
 	if (SSL_CTX_use_certificate_file(dom_ctx->ssl_ctx, pem, 1) == 0) {
 		mg_cry_ctx_internal(phys_ctx,
-		                    "%s: cannot open certificate file %s: %s",
-		                    __func__,
+		                    "cannot open certificate file %s: %s",
 		                    pem,
 		                    ssl_error());
 		return 0;
@@ -17412,8 +17382,7 @@ ssl_use_pem_file(struct mg_context *phys_ctx,
 	/* could use SSL_CTX_set_default_passwd_cb_userdata */
 	if (SSL_CTX_use_PrivateKey_file(dom_ctx->ssl_ctx, pem, 1) == 0) {
 		mg_cry_ctx_internal(phys_ctx,
-		                    "%s: cannot open private key file %s: %s",
-		                    __func__,
+		                    "cannot open private key file %s: %s",
 		                    pem,
 		                    ssl_error());
 		return 0;
@@ -17421,8 +17390,7 @@ ssl_use_pem_file(struct mg_context *phys_ctx,
 
 	if (SSL_CTX_check_private_key(dom_ctx->ssl_ctx) == 0) {
 		mg_cry_ctx_internal(phys_ctx,
-		                    "%s: certificate and private key do not match: %s",
-		                    __func__,
+		                    "certificate and private key do not match: %s",
 		                    pem);
 		return 0;
 	}
@@ -17438,8 +17406,7 @@ ssl_use_pem_file(struct mg_context *phys_ctx,
 	if (chain) {
 		if (SSL_CTX_use_certificate_chain_file(dom_ctx->ssl_ctx, chain) == 0) {
 			mg_cry_ctx_internal(phys_ctx,
-			                    "%s: cannot use certificate chain file %s: %s",
-			                    __func__,
+			                    "cannot use certificate chain file %s: %s",
 			                    chain,
 			                    ssl_error());
 			return 0;
@@ -17553,7 +17520,7 @@ ssl_servername_callback(SSL *ssl, int *ad, void *arg)
 	 * with a certificate containing all alternative names.
 	 */
 	if ((servername == NULL) || (*servername == 0)) {
-		DEBUG_TRACE("%s", "SSL connection not supporting SNI");
+		mg_cry_internal(conn, "%s", "SSL connection not supporting SNI");
 		mg_lock_context(conn->phys_ctx);
 		SSL_set_SSL_CTX(ssl, conn->dom_ctx->ssl_ctx);
 		mg_unlock_context(conn->phys_ctx);
@@ -18282,8 +18249,7 @@ close_socket_gracefully(struct mg_connection *conn)
 		 * not occur and never did in a test. Log an error message
 		 * and continue. */
 		mg_cry_internal(conn,
-		                "%s: getsockopt(SOL_SOCKET SO_ERROR) failed: %s",
-		                __func__,
+		                "getsockopt(SOL_SOCKET SO_ERROR) failed: %s",
 		                strerror(ERRNO));
 #if defined(_WIN32)
 	} else if (error_code == WSAECONNRESET) {
@@ -18303,8 +18269,7 @@ close_socket_gracefully(struct mg_connection *conn)
 		    != 0) {
 			mg_cry_internal(
 			    conn,
-			    "%s: setsockopt(SOL_SOCKET SO_LINGER(%i,%i)) failed: %s",
-			    __func__,
+			    "setsockopt(SOL_SOCKET SO_LINGER(%i,%i)) failed: %s",
 			    linger.l_onoff,
 			    linger.l_linger,
 			    strerror(ERRNO));
@@ -18608,8 +18573,7 @@ mg_connect_client_impl(const struct mg_client_options *client_options,
 
 	if (getsockname(sock, psa, &len) != 0) {
 		mg_cry_internal(conn,
-		                "%s: getsockname() failed: %s",
-		                __func__,
+		                "getsockname() failed: %s",
 		                strerror(ERRNO));
 	}
 
@@ -19645,7 +19609,7 @@ mg_connect_websocket_client_impl(const struct mg_client_options *client_options,
 	thread_data = (struct websocket_client_thread_data *)mg_calloc_ctx(
 	    1, sizeof(struct websocket_client_thread_data), conn->phys_ctx);
 	if (!thread_data) {
-		DEBUG_TRACE("%s\r\n", "Out of memory");
+		mg_cry_internal(conn, "Out of memory");
 		mg_close_connection(conn);
 		return NULL;
 	}
@@ -19658,7 +19622,7 @@ mg_connect_websocket_client_impl(const struct mg_client_options *client_options,
 	conn->phys_ctx->worker_threadids =
 	    (pthread_t *)mg_calloc_ctx(1, sizeof(pthread_t), conn->phys_ctx);
 	if (!conn->phys_ctx->worker_threadids) {
-		DEBUG_TRACE("%s\r\n", "Out of memory");
+		mg_cry_internal(conn, "Out of memory");
 		mg_free(thread_data);
 		mg_close_connection(conn);
 		return NULL;
@@ -19681,8 +19645,7 @@ mg_connect_websocket_client_impl(const struct mg_client_options *client_options,
 		mg_free(thread_data);
 		mg_close_connection(conn);
 		conn = NULL;
-		DEBUG_TRACE("%s",
-		            "Websocket client connect thread could not be started\r\n");
+		mg_cry_internal(conn, "Websocket client connect thread could not be started.");
 	}
 
 #else
@@ -20032,7 +19995,7 @@ process_new_connection(struct mg_connection *conn)
 		DEBUG_ASSERT(conn->data_len <= conn->buf_size);
 
 		if ((conn->data_len < 0) || (conn->data_len > conn->buf_size)) {
-			DEBUG_TRACE("internal error: data_len = %li, buf_size = %li",
+			mg_cry_internal(conn, "internal error: data_len = %li, buf_size = %li",
 			            (long int)conn->data_len,
 			            (long int)conn->buf_size);
 			break;
@@ -20501,8 +20464,7 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 	} else if (check_acl(ctx, &so.rsa) != 1) {
 		sockaddr_to_string(src_addr, sizeof(src_addr), &so.rsa);
 		mg_cry_ctx_internal(ctx,
-		                    "%s: %s is not allowed to connect",
-		                    __func__,
+		                    "%s is not allowed to connect",
 		                    src_addr);
 		closesocket(so.sock);
 	} else {
@@ -20514,8 +20476,7 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 		so.is_optional = listener->is_optional;
 		if (getsockname(so.sock, &so.lsa.sa, &len) != 0) {
 			mg_cry_ctx_internal(ctx,
-			                    "%s: getsockname() failed: %s",
-			                    __func__,
+			                    "getsockname() failed: %s",
 			                    strerror(ERRNO));
 		}
 
@@ -20537,8 +20498,7 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 			    != 0) {
 				mg_cry_ctx_internal(
 				    ctx,
-				    "%s: setsockopt(SOL_SOCKET SO_KEEPALIVE) failed: %s",
-				    __func__,
+				    "setsockopt(SOL_SOCKET SO_KEEPALIVE) failed: %s",
 				    strerror(ERRNO));
 			}
 		}
@@ -20556,8 +20516,7 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 			if (set_tcp_nodelay(&so, 1) != 0) {
 				mg_cry_ctx_internal(
 				    ctx,
-				    "%s: setsockopt(IPPROTO_TCP TCP_NODELAY) failed: %s",
-				    __func__,
+				    "setsockopt(IPPROTO_TCP TCP_NODELAY) failed: %s",
 				    strerror(ERRNO));
 			}
 		}
@@ -20854,7 +20813,7 @@ static char ** mg_setup_document_roots_vector(struct mg_context *ctx,
 		}
 
 		const char * d = docRoots;
-		while((ok)&&(d)&&(*d))
+		while((ok) && (d) && (*d))
 		{
 			const char * nextRoot = d;
 			d = strchr(d, pathSep);
@@ -20876,12 +20835,10 @@ static char ** mg_setup_document_roots_vector(struct mg_context *ctx,
 		}
 	}
 
-	if ((roots)&&(ok)) return roots;
-	else
-	{
-		mg_cry_ctx_internal(ctx,
-				"%s: Not enough memory to set up document roots vector",
-		                __func__);
+	if ((roots) && (ok)) {
+		return roots;
+	} else {
+		mg_cry_ctx_internal(ctx, "Not enough memory to set up document roots vector");
 		mg_free_document_roots_vector(roots);
 		return NULL;
 	}
@@ -21556,7 +21513,7 @@ mg_start2(struct mg_init_data *init, struct mg_error_data *error)
 	ctx->dd.websocket_roots = mg_setup_document_roots_vector(ctx, &ctx->dd,
 					WEBSOCKET_ROOT, FALLBACK_WEBSOCKET_ROOT, WEBSOCKET_ROOTS);
 	if (ctx->dd.websocket_roots == NULL) {
-		mg_cry_ctx_internal(ctx, "%s", "Couldn't set up websocket roots");
+		mg_cry_ctx_internal(ctx, "%s", "Couldn't set up websocket root(s)");
 		free_context(ctx);
 		pthread_setspecific(sTlsKey, NULL);
 		return NULL;
@@ -22883,7 +22840,7 @@ mg_set_misc_socket_handler(const struct mg_connection *cconn,
 			   mg_misc_socket_flags_provider event_flags_query_callback)
 {
 	struct mg_connection * conn = (struct mg_connection *) cconn;
-	if ((conn == NULL)||(sock_fd < 0)) {
+	if ((conn == NULL) || (sock_fd < 0)) {
 		return -1;  /* invalid parameter */
 	}
 
@@ -23347,8 +23304,7 @@ mg_init_library(unsigned features)
 			if (initialize_openssl(ebuf, sizeof(ebuf))) {
 				mg_openssl_initialized = 1;
 			} else {
-				(void)ebuf;
-				DEBUG_TRACE("Initializing SSL failed: %s", ebuf);
+				mg_cry_internal(conn, "Initializing SSL failed: %s", ebuf);
 				features_inited &= ~((unsigned)(MG_FEATURES_SSL));
 			}
 		} else {
