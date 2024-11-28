@@ -172,13 +172,6 @@ mg_static_assert(sizeof(void *) >= sizeof(int), "data type size check");
 #error "Inconsistent build flags, NO_FILESYSTEMS requires NO_FILES"
 #endif
 
-#if 0
-/* DTL -- including winsock2.h works better if lean and mean */
-#if !defined(WIN32_LEAN_AND_MEAN)
-#define WIN32_LEAN_AND_MEAN
-#endif
-#endif
-
 #if defined(__SYMBIAN32__)
 /* According to https://en.wikipedia.org/wiki/Symbian#History,
  * Symbian is no longer maintained since 2014-01-01.
@@ -975,6 +968,8 @@ typedef int SOCKET;
 
 #endif /* defined(_WIN32) - WINDOWS vs UNIX include block */
 
+/* ---------------------- end of sys-porting common chunk ----------------------------- */
+
 /* In case our C library is missing "timegm", provide an implementation */
 #if defined(NEED_TIMEGM)
 static inline int
@@ -1577,13 +1572,11 @@ static void mg_snprintf(const struct mg_connection *conn,
 #if defined(vsnprintf)
 #undef vsnprintf
 #endif
-#if !defined(NDEBUG)
 #define malloc DO_NOT_USE_THIS_FUNCTION__USE_mg_malloc
 #define calloc DO_NOT_USE_THIS_FUNCTION__USE_mg_calloc
 #define realloc DO_NOT_USE_THIS_FUNCTION__USE_mg_realloc
 #define free DO_NOT_USE_THIS_FUNCTION__USE_mg_free
 #define snprintf DO_NOT_USE_THIS_FUNCTION__USE_mg_snprintf
-#endif
 #if defined(_WIN32)
 /* vsnprintf must not be used in any system,
  * but this define only works well for Windows. */
@@ -2976,7 +2969,6 @@ mg_path_suspicious(const struct mg_connection *conn, const char *path)
 		return 1;
 	}
 
-#if defined(_WIN32)
 	while (*c) {
 		if (*c < 32) {
 			/* Control character */
@@ -2990,13 +2982,18 @@ mg_path_suspicious(const struct mg_connection *conn, const char *path)
 			/* Wildcard character */
 			return 1;
 		}
+#if defined(_WIN32)
 		if (*c == '"') {
 			/* Windows quotation */
 			return 1;
 		}
+#endif
+		if (*c == '&') {
+			/* Linux ampersand */
+			return 1;
+		}
 		c++;
 	}
-#endif
 
 	/* Nothing suspicious found */
 	return 0;
