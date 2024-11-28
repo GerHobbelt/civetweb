@@ -6276,8 +6276,41 @@ push_inner(struct mg_context *ctx,
 			mg_sleep(5);
 		} else {
 			/* For sockets, wait for the socket using poll */
+
+// TODO? same code as pull_inner() ??
+#if 0
+			unsigned int num_pfds;
+			struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLOUT);
+			if (pfd == NULL) {
+				mg_cry_internal(conn, "%s: SSL mg_get_poll_fds_for_connection() failed", __func__);
+				return -2;
+			}
+
+			int pollres = mg_poll(pfd,
+			                  num_pfds,
+			                  (int)(ms_wait),
+			                  &ctx->stop_flag,
+			                  1);
+			if (!STOP_FLAG_IS_ZERO(&ctx->stop_flag)) {
+				return -2;
+			}
+			if (pollres > 0) {
+				if (mg_dispatch_misc_socket_callbacks(conn) == 0) {
+					return -2;
+				}
+				// client_is_ready_for_write:
+				if ((pfd[0].revents & POLLOUT) != 0) {
+					continue;
+				} else {
+					/* Timeout */
+					break;
+				}
+			} else if (pollres < 0) {
+				/* Error */
+				return -2;
+			}
+#else
 			struct mg_pollfd pfd[2];
-			int pollres;
 			unsigned int num_sock = 1;
 
 			pfd[0].fd = sock;
@@ -6289,13 +6322,14 @@ push_inner(struct mg_context *ctx,
 				num_sock++;
 			}
 
-			pollres = mg_poll(pfd, num_sock, (int)(ms_wait), &(ctx->stop_flag), 1);
+			int pollres = mg_poll(pfd, num_sock, (int)(ms_wait), &(ctx->stop_flag), 1);
 			if (!STOP_FLAG_IS_ZERO(&ctx->stop_flag)) {
 				return -2;
 			}
 			if (pollres > 0) {
 				continue;
 			}
+#endif
 		}
 
 		if (timeout > 0) {
@@ -6372,7 +6406,7 @@ mg_get_poll_fds_for_connection(struct mg_connection * conn,
 		if (num_pfds != conn->custom_mg_poll_fds_array_size) {
 			struct mg_pollfd * new_fds = (struct mg_pollfd *)
 				mg_realloc_ctx(conn->custom_mg_poll_fds_array,
-		                        num_pfds*sizeof(conn->custom_mg_poll_fds_array[0]),
+		                        num_pfds * sizeof(conn->custom_mg_poll_fds_array[0]),
 		                        conn->phys_ctx);
 			if (new_fds == NULL) {
 				return NULL;  /* out of memory? */
@@ -6382,7 +6416,7 @@ mg_get_poll_fds_for_connection(struct mg_connection * conn,
 		}
 
 		ret = conn->custom_mg_poll_fds_array;
-		for (unsigned int i=0; i<conn->num_misc_socket_callbacks; i++) {
+		for (unsigned int i = 0; i < conn->num_misc_socket_callbacks; i++) {
 			const struct mg_misc_socket_callback * cb = &conn->misc_socket_callbacks[i];
 			struct mg_pollfd * pfd = &ret[i+2];  /* the first two pfds are internal and will be set up separately at the end of this function */
 			pfd->fd = cb->sock_fd;
@@ -6461,7 +6495,6 @@ pull_inner(FILE *fp,
 	} else if (conn->ssl != NULL) {
 		struct mg_pollfd pfd[2];
 		int to_read;
-		int pollres;
 		int client_is_ready_for_read = 0;
 
 		to_read = mbedtls_ssl_get_bytes_avail(conn->ssl);
@@ -6471,20 +6504,25 @@ pull_inner(FILE *fp,
 			 * but there is more available in the SSL layer. So don't poll
 			 * conn->client.sock yet. */
 
-			pollres = 1;
+		    client_is_ready_for_read = 1;
 			if (to_read > len)
 				to_read = len;
 		} else {
 			unsigned int num_pfds;
 			struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLIN);
+			if (pfd == NULL) {
+				mg_cry_internal(conn, "%s: SSL mg_get_poll_fds_for_connection() failed", __func__);
+				return -2;
+			}
+
 
 			to_read = len;
 
-			pollres = pfds ? mg_poll(pfd,
+			int pollres = mg_poll(pfd,
 			                  num_pfds,
 			                  (int)(timeout * 1000.0),
 			                  &(conn->phys_ctx->stop_flag),
-			                  1) : -1;
+			                  1);
 			if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
 				return -2;
 			}
@@ -6493,6 +6531,9 @@ pull_inner(FILE *fp,
 					return -2;
 				}
 				client_is_ready_for_read = ((pfd[0].revents & POLLIN) != 0);
+			} else if (pollres < 0) {
+				/* Error */
+				return -2;
 			}
 		}
 
@@ -6510,9 +6551,6 @@ pull_inner(FILE *fp,
 			} else {
 				err = 0;
 			}
-		} else if (pollres < 0) {
-			/* Error */
-			return -2;
 		} else {
 			/* pollres = 0 means timeout */
 			nread = 0;
@@ -6521,7 +6559,6 @@ pull_inner(FILE *fp,
 #elif !defined(NO_SSL)
 	} else if (conn->ssl != NULL) {
 		int ssl_pending;
-		int pollres;
 		int client_is_ready_for_read = 0;
 
 		if ((ssl_pending = SSL_pending(conn->ssl)) > 0) {
@@ -6531,23 +6568,30 @@ pull_inner(FILE *fp,
 			if (ssl_pending > len) {
 				ssl_pending = len;
 			}
-			pollres = 1;
+			client_is_ready_for_read = 1;
 		} else {
 			unsigned int num_pfds;
 			struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLIN);
-			pollres = pfd ? mg_poll(pfd,
+			if (pfd == NULL) {
+				mg_cry_internal(conn, "%s: SSL mg_get_poll_fds_for_connection() failed", __func__);
+				return -2;
+			}
+
+			int pollres = mg_poll(pfd,
 			                  num_pfds,
 			                  (int)(timeout * 1000.0),
 			                  &(conn->phys_ctx->stop_flag),
-			                  1) : -1;
+			                  1);
+			if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
+				return -2;
+			}
 			if (pollres > 0) {
 				if (mg_dispatch_misc_socket_callbacks(conn) == 0) {
 					return -2;
 				}
 				client_is_ready_for_read = ((pfd[0].revents & POLLIN) != 0);
-			}
-
-			if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
+			} else if (pollres < 0) {
+				/* Error */
 				return -2;
 			}
 		}
@@ -6572,9 +6616,6 @@ pull_inner(FILE *fp,
 			} else {
 				err = 0;
 			}
-		} else if (pollres < 0) {
-			/* Error */
-			return -2;
 		} else {
 			/* pollres = 0 means timeout */
 			nread = 0;
@@ -6582,15 +6623,19 @@ pull_inner(FILE *fp,
 #endif
 
 	} else {
-		int pollres;
 
 		unsigned int num_pfds;
 		struct mg_pollfd * pfd = mg_get_poll_fds_for_connection(conn, &num_pfds, POLLIN);
-		pollres = pfd ? mg_poll(pfd,
+		if (pfd == NULL) {
+			mg_cry_internal(conn, "%s: SSL mg_get_poll_fds_for_connection() failed", __func__);
+			return -2;
+		}
+
+		int pollres = mg_poll(pfd,
 		                  num_pfds,
 		                  (int)(timeout * 1000.0),
 		                  &(conn->phys_ctx->stop_flag),
-		                  1) : -1;
+		                  1);
 		if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
 			return -2;
 		}
@@ -16939,7 +16984,6 @@ sslize(struct mg_connection *conn,
 					 * See https://linux.die.net/man/3/ssl_get_error
 					 * This is typical for non-blocking sockets. */
 
-					int pollres;
 					short primary_fd_events = ((err == SSL_ERROR_WANT_CONNECT)
 					                || (err == SSL_ERROR_WANT_WRITE))
 					                   ? POLLOUT
@@ -16953,9 +16997,7 @@ sslize(struct mg_connection *conn,
 						break;
 					}
 
-					pollres =
-					    mg_poll(pfd, num_pfds, 50, &(conn->phys_ctx->stop_flag), 1);
-
+					int pollres = mg_poll(pfd, num_pfds, 50, &(conn->phys_ctx->stop_flag), 1);
 					if (pollres < 0) {
 						/* Break if error occurred (-1)
 						 * or server shutdown (-2) */
