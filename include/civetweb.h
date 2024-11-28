@@ -1903,8 +1903,8 @@ mg_connect_client2(const char *host,
 CIVETWEB_API int mg_get_response2(struct mg_connection *conn,
                                   struct mg_error_data *error,
                                   int timeout);
-#endif
 
+#endif
 
 CIVETWEB_API struct mg_context *mg_start2(struct mg_init_data *init,
                                           struct mg_error_data *error);

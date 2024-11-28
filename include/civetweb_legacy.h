@@ -560,7 +560,7 @@ int mg_read(struct mg_connection *, void *buf, size_t len);
 // Return non-zero when data is pending for reading on this connection.
 //
 // Note: This is a non-blocking, very low cost operation which should be
-//       used together with mg_read() and its descendents (e.g.
+//       used together with mg_read() and its descendants (e.g.
 //       mg_read_http_response_head()) in client-side connections at least.
 //       See also the test/unit_test.c::test_chunked_transfer().
 int mg_is_read_data_available(struct mg_connection *conn);
