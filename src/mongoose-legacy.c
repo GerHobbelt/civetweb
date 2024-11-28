@@ -18,6 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#if 0
 
 #define INSIDE_MONGOOSE_C   1
 #include "mongoose.h"
@@ -781,7 +782,7 @@ NOTE: has the mg_ prefix to prevent collisions with system's strerror();
       ERRNO is a mongoose-internal #define.
 */
 const char *mg_strerror(int errcode) {
-#if defined(_WIN32) && !defined(__SYMBIAN32__)
+#if defined(_WIN32)
 
   const char *s = strerror(errcode);
   if (is_empty(s) || GetLastError() == (DWORD)errcode) {
@@ -2667,7 +2668,7 @@ static void send_http_error(struct mg_connection *conn, int status,
   va_end(ap);
 }
 
-#if defined(_WIN32) && !defined(__SYMBIAN32__)
+#if defined(_WIN32)
 
 #if !defined(HAVE_PTHREAD)
 
@@ -9144,7 +9145,7 @@ void mg_stop(struct mg_context *ctx) {
 
   free_context(ctx);
 
-#if defined(_WIN32) && !defined(__SYMBIAN32__)
+#if defined(_WIN32)
   global_log_file_lock.active = 0;
   DeleteCriticalSection(&global_log_file_lock.lock);
   DeleteCriticalSection(&DisconnectExPtrCS);
@@ -9158,7 +9159,7 @@ struct mg_context *mg_start(const struct mg_user_class_t *user_functions,
   const char *name, *value, *default_value;
   int i;
 
-#if defined(_WIN32) && !defined(__SYMBIAN32__)
+#if defined(_WIN32)
   WSADATA data;
   WSAStartup(MAKEWORD(2,2), &data);
   InitializeCriticalSection(&global_log_file_lock.lock);
@@ -9257,7 +9258,7 @@ struct mg_context *mg_start(const struct mg_user_class_t *user_functions,
     return NULL;
   }
 
-#if !defined(_WIN32) && !defined(__SYMBIAN32__)
+#if !defined(_WIN32)
   // Ignore SIGPIPE signal, so if browser cancels the request, it
   // won't kill the whole process.
   (void) signal(SIGPIPE, SIG_IGN);
@@ -9762,3 +9763,7 @@ int mg_signal_assert(const char *expr, const char *filepath, unsigned int lineno
 	return 1;
 }
 #endif
+
+
+#endif
+

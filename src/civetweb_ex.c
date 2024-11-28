@@ -75,7 +75,7 @@ int mg_set_nodelay_mode(struct mg_connection *conn, int on)
 {
     if (conn && conn->client.sock != INVALID_SOCKET)
     {
-#if !defined(SOL_TCP) && (defined(_WIN32) && !defined(__SYMBIAN32__))
+#if !defined(SOL_TCP) && (defined(_WIN32))
         DWORD v_on = !!on;
         return setsockopt(conn->client.sock, IPPROTO_TCP, TCP_NODELAY, (void *)&v_on, sizeof(v_on));
 #elif !defined(SOL_TCP)
@@ -93,7 +93,7 @@ int mg_set_socket_keepalive(struct mg_connection *conn, int on)
 {
     if (conn && conn->client.sock != INVALID_SOCKET)
     {
-#if defined(_WIN32) && !defined(__SYMBIAN32__)
+#if defined(_WIN32)
         BOOL v_on = !!on;
 #else
         int v_on = !!on;
