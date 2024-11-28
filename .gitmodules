@@ -1,0 +1,27 @@
+[submodule "selectable-socketpair"]
+	path = src/thirdparty/selectable-socketpair
+	url = git@github.com:GerHobbelt/selectable-socketpair.git
+[submodule "upskirt"]
+	path = src/thirdparty/upskirt
+	url = git@github.com:GerHobbelt/upskirt.git
+[submodule "pthread-win32"]
+	path = src/thirdparty/pthread-win32
+	url = git@github.com:GerHobbelt/pthread-win32.git
+[submodule "documentation/wiki"]
+	path = docs/wiki
+	url = git@github.com:GerHobbelt/civetweb.wiki.git
+[submodule "documentation/wiki-vanilla"]
+	path = docs/wiki-vanilla
+	url = git@github.com:GerHobbelt/civetweb-vanilla.wiki.git
+[submodule "extra-support-libs/popt"]
+	path = src/thirdparty/popt
+	url = git@github.com:GerHobbelt/POPT.git
+[submodule "src/thirdparty/lua"]
+	path = src/thirdparty/lua
+	url = git@github.com:GerHobbelt/lua.git
+[submodule "src/thirdparty/duktape"]
+	path = src/thirdparty/duktape
+	url = git@github.com:GerHobbelt/duktape.git
+[submodule "src/thirdparty/luafilesystem"]
+	path = src/thirdparty/luafilesystem
+	url = git@github.com:GerHobbelt/luafilesystem.git

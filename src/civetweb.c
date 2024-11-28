@@ -185,6 +185,10 @@ mg_static_assert(sizeof(void *) >= sizeof(int), "data type size check");
 #error "Symbian is no longer maintained. CivetWeb no longer supports Symbian."
 #endif /* __SYMBIAN32__ */
 
+#if defined(__rtems__)
+#include <rtems/version.h>
+#endif
+
 #if defined(__ZEPHYR__)
 #include <ctype.h>
 #include <fcntl.h>
@@ -219,11 +223,9 @@ static int zephyr_worker_stack_index;
 
 #endif
 
-#if !defined(CIVETWEB_HEADER_INCLUDED)
 /* Include the header file here, so the CivetWeb interface is defined for the
  * entire implementation, including the following forward definitions. */
 #include "civetweb.h"
-#endif
 
 #if !defined(DEBUG_TRACE)
 #if defined(DEBUG)
@@ -455,6 +457,10 @@ _civet_safe_clock_gettime(int clk_id, struct timespec *t)
 #include "zlib.h"
 #endif
 
+#if defined(USE_ZLIB_NG)
+#include "zconf-ng.h"
+#include "zlib-ng.h"
+#endif
 
 /********************************************************************/
 /* CivetWeb configuration defines */
@@ -887,7 +893,9 @@ typedef unsigned short int in_port_t;
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#if !defined(__rtems__)
 #include <sys/utsname.h>
+#endif
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -903,8 +911,22 @@ typedef unsigned short int in_port_t;
 #endif
 
 #if defined(__MACH__) && defined(__APPLE__)
-#define SSL_LIB "libssl.dylib"
-#define CRYPTO_LIB "libcrypto.dylib"
+
+#if defined(OPENSSL_API_3_0)
+#define SSL_LIB "libssl.3.dylib"
+#define CRYPTO_LIB "libcrypto.3.dylib"
+#endif
+
+#if defined(OPENSSL_API_1_1)
+#define SSL_LIB "libssl.1.1.dylib"
+#define CRYPTO_LIB "libcrypto.1.1.dylib"
+#endif /* OPENSSL_API_1_1 */
+
+#if defined(OPENSSL_API_1_0)
+#define SSL_LIB "libssl.1.0.dylib"
+#define CRYPTO_LIB "libcrypto.1.0.dylib"
+#endif /* OPENSSL_API_1_0 */
+
 #else
 #if !defined(SSL_LIB)
 #define SSL_LIB "libssl.so"
@@ -965,7 +987,7 @@ count_leap(int y)
 	return (y - 1969) / 4 - (y - 1901) / 100 + (y - 1601) / 400;
 }
 
-time_t
+static time_t
 timegm(struct tm *tm)
 {
 	static const unsigned short ydays[] = {
@@ -1714,6 +1736,12 @@ mg_get_current_time_ns(void)
 static void
 DEBUG_TRACE_FUNC(const char *func, unsigned line, const char *fmt, ...)
 {
+	 #if defined(__ZEPHYR__)
+	(void)func;
+	(void)line;
+	(void)fmt;
+	return;
+	#else
 	va_list args;
 	struct timespec tsnow;
 
@@ -1736,6 +1764,7 @@ DEBUG_TRACE_FUNC(const char *func, unsigned line, const char *fmt, ...)
 	putc('\n', DEBUG_TRACE_STREAM);
 	fflush(DEBUG_TRACE_STREAM);
 	funlockfile(DEBUG_TRACE_STREAM);
+	#endif /* __ZEPHYR__ */
 }
 #endif /* NEED_DEBUG_TRACE_FUNC */
 
@@ -2607,8 +2636,8 @@ struct mg_connection {
 	int websocket_deflate_client_no_context_takeover;
 	int websocket_deflate_initialized;
 	int websocket_deflate_flush;
-	z_stream websocket_deflate_state;
-	z_stream websocket_inflate_state;
+	zng_stream websocket_deflate_state;
+	zng_stream websocket_inflate_state;
 #endif
 	int handled_requests; /* Number of requests handled by this connection
 	                       */
@@ -6825,7 +6854,7 @@ handle_request_stat_log(struct mg_connection *conn)
 #define USE_ALPN
 #include "http2.inl"
 /* Not supported with HTTP/2 */
-#define HTTP1_only                                                             \
+#define HTTP1_only()                                                           \
 	{                                                                          \
 		if (conn->protocol_type == PROTOCOL_TYPE_HTTP2) {                      \
 			http2_must_use_http1(conn);                                        \
@@ -6834,7 +6863,7 @@ handle_request_stat_log(struct mg_connection *conn)
 		}                                                                      \
 	}
 #else
-#define HTTP1_only
+#define HTTP1_only()
 #endif
 
 
@@ -10117,7 +10146,7 @@ scan_directory(struct mg_connection *conn,
 			 * garbage and strftime() will segfault later on in
 			 * print_dir_entry(). memset is required only if mg_stat()
 			 * fails. For more details, see
-			 * http://code.google.com/p/mongoose/issues/detail?id=79 */
+			 * http://code.google.com/p/civetweb/issues/detail?id=79 */
 			memset(&de.file, 0, sizeof(de.file));
 
 			if (truncated) {
@@ -10174,7 +10203,7 @@ remove_directory(struct mg_connection *conn, const char *dir)
 			 * garbage and strftime() will segfault later on in
 			 * print_dir_entry(). memset is required only if mg_stat()
 			 * fails. For more details, see
-			 * http://code.google.com/p/mongoose/issues/detail?id=79 */
+			 * http://code.google.com/p/civetweb/issues/detail?id=79 */
 			memset(&de.file, 0, sizeof(de.file));
 
 			if (truncated) {
@@ -13708,7 +13737,7 @@ read_websocket(struct mg_connection *conn,
 								           - inflate_buf_size_old);
 								conn->websocket_inflate_state.next_out =
 								    inflated + inflate_buf_size_old;
-								ret = inflate(&conn->websocket_inflate_state,
+								ret = zng_inflate(&conn->websocket_inflate_state,
 								              Z_SYNC_FLUSH);
 								if (ret == Z_NEED_DICT || ret == Z_DATA_ERROR
 								    || ret == Z_MEM_ERROR) {
@@ -13852,7 +13881,7 @@ mg_websocket_write_exec(struct mg_connection *conn,
 
 	/* Note that POSIX/Winsock's send() is threadsafe
 	 * http://stackoverflow.com/questions/1981372/are-parallel-calls-to-send-recv-on-the-same-socket-valid
-	 * but mongoose's mg_printf/mg_write is not (because of the loop in
+	 * but civetweb's mg_printf/mg_write is not (because of the loop in
 	 * push(), although that is only a problem if the packet is large or
 	 * outgoing buffer is full). */
 
@@ -13879,7 +13908,7 @@ mg_websocket_write_exec(struct mg_connection *conn,
 		header[0] = 0xC0u | (unsigned char)((unsigned)opcode & 0xf);
 		conn->websocket_deflate_state.avail_in = (uInt)dataLen;
 		conn->websocket_deflate_state.next_in = (unsigned char *)data;
-		deflated_size = (size_t)compressBound((uLong)dataLen);
+		deflated_size = (size_t)zng_compressBound((uLong)dataLen);
 		deflated = mg_calloc(deflated_size, sizeof(Bytef));
 		if (deflated == NULL) {
 			mg_cry_internal(
@@ -13891,7 +13920,7 @@ mg_websocket_write_exec(struct mg_connection *conn,
 		}
 		conn->websocket_deflate_state.avail_out = (uInt)deflated_size;
 		conn->websocket_deflate_state.next_out = deflated;
-		deflate(&conn->websocket_deflate_state, conn->websocket_deflate_flush);
+		zng_deflate(&conn->websocket_deflate_state, conn->websocket_deflate_flush);
 		dataLen = deflated_size - conn->websocket_deflate_state.avail_out
 		          - 4; // Strip trailing 0x00 0x00 0xff 0xff bytes
 	} else
@@ -14217,8 +14246,8 @@ handle_websocket_request(struct mg_connection *conn,
 #if defined(USE_ZLIB) && defined(MG_EXPERIMENTAL_INTERFACES)
 	/* Step 8: Close the deflate & inflate buffers */
 	if (conn->websocket_deflate_initialized) {
-		deflateEnd(&conn->websocket_deflate_state);
-		inflateEnd(&conn->websocket_inflate_state);
+		zng_deflateEnd(&conn->websocket_deflate_state);
+		zng_inflateEnd(&conn->websocket_inflate_state);
 	}
 #endif
 
@@ -15246,7 +15275,7 @@ handle_request(struct mg_connection *conn)
 #endif /* defined(USE_WEBSOCKET) */
 
 	if (is_websocket_request) {
-		HTTP1_only;
+		HTTP1_only();
 	}
 
 	/* 5.2. check if the request will be handled by a callback */
@@ -15325,7 +15354,7 @@ handle_request(struct mg_connection *conn)
 		}
 	} else if (is_put_or_delete_request && !is_script_resource
 	           && !is_callback_resource) {
-		HTTP1_only;
+		HTTP1_only();
 		/* 6.2. this request is a PUT/DELETE to a real file */
 		/* 6.2.1. thus, the server must have real files */
 #if defined(NO_FILES)
@@ -15376,7 +15405,7 @@ handle_request(struct mg_connection *conn)
 
 	/* 7. check if there are request handlers for this uri */
 	if (is_callback_resource) {
-		HTTP1_only;
+		HTTP1_only();
 		if (!is_websocket_request) {
 			i = callback_handler(conn, callback_data);
 
@@ -15442,7 +15471,7 @@ handle_request(struct mg_connection *conn)
 	/* 8. handle websocket requests */
 #if defined(USE_WEBSOCKET)
 	if (is_websocket_request) {
-		HTTP1_only;
+		HTTP1_only();
 		if (is_script_resource) {
 
 			if (is_in_script_path(conn, path)) {
@@ -15485,7 +15514,7 @@ handle_request(struct mg_connection *conn)
 
 	/* 10. Request is handled by a script */
 	if (is_script_resource) {
-		HTTP1_only;
+		HTTP1_only();
 		handle_file_based_request(conn, path, &file);
 		DEBUG_TRACE("%s", "script handling done");
 		return;
@@ -15496,7 +15525,7 @@ handle_request(struct mg_connection *conn)
 
 	/* 11. Handle put/delete/mkcol requests */
 	if (is_put_or_delete_request) {
-		HTTP1_only;
+		HTTP1_only();
 		/* 11.1. PUT method */
 		if (!strcmp(ri->request_method, "PUT")) {
 			put_file(conn, path);
@@ -15663,7 +15692,7 @@ handle_request(struct mg_connection *conn)
 
 	/* 15. Files with search/replace patterns: LSP and SSI */
 	if (is_template_text_file) {
-		HTTP1_only;
+		HTTP1_only();
 		handle_file_based_request(conn, path, &file);
 		DEBUG_TRACE("handling %s request to %s done (template)",
 		            ri->request_method,
@@ -19667,6 +19696,9 @@ mg_connect_websocket_client(const char *host,
 	memset(&client_options, 0, sizeof(client_options));
 	client_options.host = host;
 	client_options.port = port;
+	if (use_ssl) {
+		client_options.host_name = host;
+	}
 
 	return mg_connect_websocket_client_impl(&client_options,
 	                                        use_ssl,
@@ -21027,6 +21059,8 @@ get_system_name(char **sysName)
 
 	*sysName = mg_strdup(name);
 
+#elif defined(__rtems__)
+	*sysName = mg_strdup("RTEMS");
 #elif defined(__ZEPHYR__)
 	*sysName = mg_strdup("Zephyr OS");
 #else
@@ -22354,12 +22388,22 @@ mg_get_system_info(char *buffer, int buflen)
 		            (unsigned)si.dwNumberOfProcessors,
 		            (unsigned)si.dwActiveProcessorMask);
 		system_info_length += mg_str_append(&buffer, end, block);
-#elif defined(__ZEPHYR__)
+#elif defined(__rtems__)
 		mg_snprintf(NULL,
 		            NULL,
 		            block,
 		            sizeof(block),
 		            ",%s\"os\" : \"%s %s\"",
+		            eol,
+		           "RTEMS",
+		            rtems_version());
+		system_info_length += mg_str_append(&buffer, end, block);
+#elif defined(__ZEPHYR__)
+		mg_snprintf(NULL,
+		            NULL,
+		            block,
+		            sizeof(block),
+		            ",%s\"os\" : \"%s\"",
 		            eol,
 		            "Zephyr OS",
 		            ZEPHYR_VERSION);
@@ -23345,5 +23389,17 @@ mg_exit_library(void)
 	return 1;
 }
 
+unsigned int
+mg_getclient_socket(const struct mg_connection * conn)
+{
+	if (conn)
+	{
+		return conn->client.sock;
+	}
+	else
+	{
+		return 0;
+	}
+}
 
 /* End of civetweb.c */

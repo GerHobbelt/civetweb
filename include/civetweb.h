@@ -23,10 +23,11 @@
 #ifndef CIVETWEB_HEADER_INCLUDED
 #define CIVETWEB_HEADER_INCLUDED
 
-#define CIVETWEB_VERSION "1.17"
-#define CIVETWEB_VERSION_MAJOR (1)
-#define CIVETWEB_VERSION_MINOR (17)
-#define CIVETWEB_VERSION_PATCH (0)
+#define CIVETWEB_VERSION_MAJOR 1
+#define CIVETWEB_VERSION_MINOR 17
+#define CIVETWEB_VERSION_PATCH 0
+#define __CIVETWEB_STR(x)      #x
+#define CIVETWEB_VERSION       __CIVETWEB_STR(CIVETWEB_VERSION_MAJOR) "." __CIVETWEB_STR(CIVETWEB_VERSION_MINOR) "." __CIVETWEB_STR(CIVETWEB_VERSION_PATCH)
 
 #ifndef CIVETWEB_API
 #if defined(_WIN32)
@@ -138,8 +139,10 @@ struct mg_connection; /* Handle for the individual connection */
 
 
 /* Maximum number of headers */
-#define MG_MAX_HEADERS (64)
+#define MG_MAX_HEADERS  64
 
+// A HTTP header:
+//   Name: <value>
 struct mg_header {
 	const char *name;  /* HTTP header name */
 	const char *value; /* HTTP header value */
@@ -1324,6 +1327,11 @@ CIVETWEB_API const char *mg_get_builtin_mime_type(const char *file_name);
 CIVETWEB_API const char *
 mg_get_response_code_text(const struct mg_connection *conn, int response_code);
 
+/* Get the client side socket of the connection.
+   Return:
+    associated clientside socket of the connection
+*/
+CIVETWEB_API unsigned int mg_getclient_socket(const struct mg_connection *conn);
 
 /* Return CivetWeb version. */
 CIVETWEB_API const char *mg_version(void);

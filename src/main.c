@@ -1415,6 +1415,12 @@ stop_civetweb(void)
 }
 
 
+#if defined(BUILD_MONOLITHIC)
+#define main      civetweb_server_main
+#endif
+
+
+
 #if defined(_WIN32)
 /* Win32 has a small GUI.
  * Define some GUI elements and Windows message handlers. */

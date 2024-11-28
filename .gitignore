@@ -29,6 +29,8 @@ log.out
 /mingw-builds
 /output
 
+/build/
+
 #################
 ## Eclipse
 #################
@@ -81,6 +83,10 @@ tags
 [Dd]ebug/
 [Dd]ebug CONSOLE/
 [Rr]elease/
+[Dd]ebug-32/
+[Rr]elease-32/
+[Dd]ebug-64/
+[Rr]elease-64/
 x64/
 [Bb]in/
 [Oo]bj/
@@ -112,6 +118,9 @@ x64/
 *.pidb
 *.log
 *.scc
+/VisualStudio/.vs
+/VisualStudio/Debug-*/
+/VisualStudio/Release-*/
 
 # Visual C++ cache files
 ipch/
