@@ -6117,6 +6117,11 @@ mg_poll(struct mg_pollfd *pfd,
 					/* First file descriptor returned error */
 					return -1;
 				}
+				/* check shutdown signal before exiting; it might have been set while we were waiting inside the poll() call above... */
+				if (!STOP_FLAG_IS_ZERO(&*stop_flag)) {
+					/* Shut down signal */
+					return -2;
+				}
 				return result;
 			}
 		}
@@ -6284,9 +6289,6 @@ push_inner(struct mg_context *ctx,
 			                  (int)(ms_wait),
 			                  &ctx->stop_flag,
 			                  1);
-			if (!STOP_FLAG_IS_ZERO(&ctx->stop_flag)) {
-				return -2;
-			}
 			if (pollres > 0) {
 				if (mg_dispatch_misc_socket_callbacks(conn) == 0) {
 					return -2;
@@ -6299,7 +6301,7 @@ push_inner(struct mg_context *ctx,
 					break;
 				}
 			} else if (pollres < 0) {
-				/* Error */
+				/* Error or stop signal */
 				return -2;
 			}
 #else
@@ -6316,11 +6318,11 @@ push_inner(struct mg_context *ctx,
 			}
 
 			int pollres = mg_poll(pfd, num_sock, (int)(ms_wait), &(ctx->stop_flag), 1);
-			if (!STOP_FLAG_IS_ZERO(&ctx->stop_flag)) {
-				return -2;
-			}
 			if (pollres > 0) {
 				continue;
+			} else if (pollres < 0) {
+				/* Error or stop signal */
+				return -2;
 			}
 #endif
 		}
@@ -6508,7 +6510,6 @@ pull_inner(FILE *fp,
 				return -2;
 			}
 
-
 			to_read = len;
 
 			int pollres = mg_poll(pfd,
@@ -6516,16 +6517,13 @@ pull_inner(FILE *fp,
 			                  (int)(timeout * 1000.0),
 			                  &(conn->phys_ctx->stop_flag),
 			                  1);
-			if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
-				return -2;
-			}
 			if (pollres > 0) {
 				if (mg_dispatch_misc_socket_callbacks(conn) == 0) {
 					return -2;
 				}
 				client_is_ready_for_read = ((pfd[0].revents & POLLIN) != 0);
 			} else if (pollres < 0) {
-				/* Error */
+				/* Error or stop signal */
 				return -2;
 			}
 		}
@@ -6575,16 +6573,13 @@ pull_inner(FILE *fp,
 			                  (int)(timeout * 1000.0),
 			                  &(conn->phys_ctx->stop_flag),
 			                  1);
-			if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
-				return -2;
-			}
 			if (pollres > 0) {
 				if (mg_dispatch_misc_socket_callbacks(conn) == 0) {
 					return -2;
 				}
 				client_is_ready_for_read = ((pfd[0].revents & POLLIN) != 0);
 			} else if (pollres < 0) {
-				/* Error */
+				/* Error or stop signal */
 				return -2;
 			}
 		}
@@ -6629,9 +6624,6 @@ pull_inner(FILE *fp,
 		                  (int)(timeout * 1000.0),
 		                  &(conn->phys_ctx->stop_flag),
 		                  1);
-		if (!STOP_FLAG_IS_ZERO(&conn->phys_ctx->stop_flag)) {
-			return -2;
-		}
 		if (pollres > 0) {
 			if (mg_dispatch_misc_socket_callbacks(conn) == 0) {
 				return -2;
@@ -6648,7 +6640,7 @@ pull_inner(FILE *fp,
 				nread = 0;
 			}
 		} else if (pollres < 0) {
-			/* error calling poll */
+			/* error calling poll or stop signal detected */
 			return -2;
 		} else {
 			/* pollres = 0 means timeout */
@@ -9863,7 +9855,6 @@ connect_socket(
 
 		/* Data for poll */
 		struct mg_pollfd pfd[2];
-		int pollres;
 		int ms_wait = 10000;       /* 10 second timeout */
 		stop_flag_t nonstop = 0;   /* STOP_FLAG_ASSIGN(&nonstop, 0); */
 		unsigned int num_sock = 1; /* use one or two sockets */
@@ -9882,9 +9873,7 @@ connect_socket(
 			num_sock++;
 		}
 
-		pollres =
-		    mg_poll(pfd, num_sock, ms_wait, ctx ? &(ctx->stop_flag) : &nonstop, 1);
-
+		int pollres = mg_poll(pfd, num_sock, ms_wait, ctx ? &(ctx->stop_flag) : &nonstop, 1);
 		if (pollres != 1) {
 			/* Not connected */
 			if (error != NULL) {
@@ -16971,6 +16960,7 @@ sslize(struct mg_connection *conn,
 					if (pollres < 0) {
 						/* Break if error occurred (-1)
 						 * or server shutdown (-2) */
+						MG_ASSERT(ret != 0);
 						break;
 					} else if (pollres > 0) {
 						if (mg_dispatch_misc_socket_callbacks(conn) == 0) {
@@ -20626,13 +20616,13 @@ master_thread_run(struct mg_context *ctx)
 		    ctx->thread_shutdown_notification_socket;
 		pfd[ctx->num_listening_sockets].events = POLLIN;
 
-		if (mg_poll(pfd,
+		int pollres = mg_poll(pfd,
 		            ctx->num_listening_sockets
 		                + 1, // +1 for the thread_shutdown_notification_socket
 		            SOCKET_TIMEOUT_QUANTUM,
 		            &(ctx->stop_flag),
-		            0)
-		    > 0) {
+		            0);
+		if (pollres > 0) {
 			for (i = 0; i < ctx->num_listening_sockets; i++) {
 				/* NOTE(lsm): on QNX, poll() returns POLLRDNORM after the
 				 * successful poll, and POLLIN is defined as
@@ -20644,6 +20634,13 @@ master_thread_run(struct mg_context *ctx)
 					accept_new_connection(&ctx->listening_sockets[i], ctx);
 				}
 			}
+		} else if (pollres == 0) {
+			/* timeout: server is idling? */
+
+			//TODO: call_user_over_ctx(ctx, 0, MG_IDLE_MASTER);
+		} else {
+			/* Error or stop signal */
+			break;
 		}
 	}
 
