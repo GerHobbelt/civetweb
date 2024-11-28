@@ -470,7 +470,7 @@ _civet_safe_clock_gettime(int clk_id, struct timespec *t)
 
 /* Timeout interval for select/poll calls.
  * The timeouts depend on "*_timeout_ms" configuration values, but long
- * timeouts are split into timouts as small as SOCKET_TIMEOUT_QUANTUM.
+ * timeouts are split into timeouts as small as SOCKET_TIMEOUT_QUANTUM.
  * This reduces the time required to stop the server. */
 #if !defined(SOCKET_TIMEOUT_QUANTUM)
 #define SOCKET_TIMEOUT_QUANTUM (2000) /* in ms */
