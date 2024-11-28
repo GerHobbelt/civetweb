@@ -172,9 +172,11 @@ mg_static_assert(sizeof(void *) >= sizeof(int), "data type size check");
 #error "Inconsistent build flags, NO_FILESYSTEMS requires NO_FILES"
 #endif
 
+#if 0
 /* DTL -- including winsock2.h works better if lean and mean */
 #if !defined(WIN32_LEAN_AND_MEAN)
 #define WIN32_LEAN_AND_MEAN
+#endif
 #endif
 
 #if defined(__SYMBIAN32__)
@@ -533,12 +535,12 @@ mg_static_assert(sizeof(size_t) == 4 || sizeof(size_t) == 8,
 
 
 #if defined(_WIN32) /* WINDOWS include block */
+#include <winsock2.h> /* DTL add for SO_EXCLUSIVE */
+#include <ws2tcpip.h>
+#include <windows.h>
 #include <malloc.h> /* *alloc( */
 #include <stdlib.h> /* *alloc( */
 #include <time.h>   /* struct timespec */
-#include <windows.h>
-#include <winsock2.h> /* DTL add for SO_EXCLUSIVE */
-#include <ws2tcpip.h>
 
 typedef const char *SOCK_OPT_TYPE;
 

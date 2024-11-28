@@ -23,12 +23,16 @@
 
 #include "civetweb.h"
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
 struct socket;          // Handle for the socket related to a client / server connection
 
+struct fd_set;
+typedef struct fd_set fd_set;
 
 int64_t mg_get_num_bytes_sent(struct mg_connection *conn);
 int64_t mg_get_num_bytes_received(struct mg_connection *conn);

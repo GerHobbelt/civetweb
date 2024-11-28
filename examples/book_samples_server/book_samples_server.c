@@ -47,6 +47,9 @@ void srv_signal_assert(const char *expr, const char *filepath, unsigned int line
 #ifdef _WIN32
 #include "civetweb_book_samples_server.resource.h"
 #define _RICHEDIT_VER 0x0800
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
 #include <richedit.h>
 #ifndef AURL_ENABLEURL
 #define AURL_ENABLEURL   1
@@ -60,10 +63,15 @@ void srv_signal_assert(const char *expr, const char *filepath, unsigned int line
 #ifndef WC_ERR_INVALID_CHARS
 #define WC_ERR_INVALID_CHARS      0 // 0x00000080  // error for invalid chars
 #endif
+#include <stdlib.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX _MAX_PATH
+#endif
 #endif // _WIN32
 
-#include <upskirt/src/markdown.h>
-#include <upskirt/html/html.h>
+//#include <upskirt/src/markdown.h>
+//#include <upskirt/html/html.h>
 
 
 
@@ -605,7 +613,7 @@ static int report_markdown_failure(struct mg_connection *conn, int is_inline_pro
 
   if (is_inline_production)
   {
-    mg_printf(conn, "<h1 style=\"color: red;\">Error: %d - %s</h1>\n", response_code, mg_get_response_code_text(response_code));
+    mg_printf(conn, "<h1 style=\"color: red;\">Error: %d - %s</h1>\n", response_code, mg_get_response_code_text(conn, response_code));
     va_start(args, fmt);
     mg_vprintf(conn, fmt, args);
     va_end(args);
@@ -766,7 +774,7 @@ static int send_requested_resource(struct mg_context *ctx, struct mg_connection 
 }
 
 /*
-  Ths bit of code shows how one can go about providing something very much like
+  This bit of code shows how one can go about providing something very much like
   IP-based and/or Name-based Virtual Hosting.
 
   When you have your local DNS (or hosts file for that matter) configured to
