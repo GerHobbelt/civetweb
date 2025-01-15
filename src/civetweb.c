@@ -9823,6 +9823,8 @@ connect_socket(struct mg_context *ctx /* may be NULL */,
 		return 0;
 	}
 
+        setsockopt(*sock, IPPROTO_TCP, TCP_NODELAY, (SOCK_OPT_TYPE)&nodelay_on, sizeof(nodelay_on));
+
 	set_close_on_exec(*sock, NULL, ctx);
         set_blocking_mode(*sock);
 
@@ -9857,7 +9859,7 @@ connect_socket(struct mg_context *ctx /* may be NULL */,
 
      // if (use_ssl) {
           // printf("%s() setting TCP_NODELAY sd=%d use_ssl=%d \n",__func__,*sock,use_ssl);
-          setsockopt(*sock, IPPROTO_TCP, TCP_NODELAY, &nodelay_on, sizeof(nodelay_on));
+     //     setsockopt(*sock, IPPROTO_TCP, TCP_NODELAY, &nodelay_on, sizeof(nodelay_on));
      // }
 
 	if (conn_ret != 0) {
@@ -15726,6 +15728,7 @@ static int connect_to_wakeup_master(SOCKET lsd)
    socklen_t len = sizeof(serv_addr);
 #endif
    int rc = 0 ;
+   int nodelay_on = 1;
 
    if ((lsd == INVALID_SOCKET) || (lsd == 0)) {
      return -1;
@@ -15741,6 +15744,8 @@ static int connect_to_wakeup_master(SOCKET lsd)
    if (sd == INVALID_SOCKET) {
      return -1;
    }
+
+   setsockopt(sd, IPPROTO_TCP, TCP_NODELAY, (SOCK_OPT_TYPE)&nodelay_on, sizeof(nodelay_on));
 
    memset(&to_addr, 0, sizeof(to_addr));
    to_addr.sin_family = AF_INET;
@@ -15977,6 +15982,7 @@ set_ports_option(struct mg_context *phys_ctx)
 
 	const char *opt_txt;
 	long opt_listen_backlog;
+        int nodelay_on = 1;
 
 	if (!phys_ctx) {
 		return 0;
@@ -16026,6 +16032,7 @@ set_ports_option(struct mg_context *phys_ctx)
 			                    portsTotal);
 			continue;
 		}
+                setsockopt(so.sock, IPPROTO_TCP, TCP_NODELAY, (SOCK_OPT_TYPE)&nodelay_on, sizeof(nodelay_on));
 
 #if defined(_WIN32)
 		/* Windows SO_REUSEADDR lets many procs binds to a
