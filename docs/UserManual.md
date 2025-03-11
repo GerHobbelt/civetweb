@@ -443,11 +443,13 @@ Comma-separated list of ports to listen on. If the port is SSL, a
 letter `s` must be appended, for example, `80,443s` will open
 port 80 and port 443, and connections on port 443 will be SSL-ed. If the port
 should be optional the letter `o` must be appended, for example with `80o,443s`
-starting the server will not exit if binding to port 80 is not possible.
+the server will not exit if binding to port 80 is not possible during startup.
 For non-SSL ports, it is allowed to append letter `r`, meaning 'redirect'.
 Redirect ports will redirect all their traffic to the first configured
 SSL port. For example, if `listening_ports` is `80r,443s`, then all
 HTTP traffic coming at port 80 will be redirected to HTTPS port 443.
+For ports with redirection configured `authentication_domain` will
+be used as host component of the redirection url.
 
 It is possible to specify an IP address to bind to. In this case,
 an IP address and a colon must be prepended to the port number.
@@ -691,7 +693,8 @@ The OpenSSL cipher string uses different cipher names than IANA
 (see [this mapping](https://testssl.sh/openssl-iana.mapping.html)).
 
 In case CivetWeb is built with a TLS library other than OpenSSL 
-(e.g., [mbedTLS](https://tls.mbed.org/supported-ssl-ciphersuites)), 
+(e.g., [mbedTLS](https://tls.mbed.org/supported-ssl-ciphersuites)
+or [GnuTLS](https://www.gnutls.org/manual/html_node/Supported-ciphersuites.html)), 
 the cipher names may be different.
 
 ### ssl\_default\_verify\_paths `yes`
