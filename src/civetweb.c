@@ -9551,8 +9551,9 @@ static int connect_socket_with_timeout(SOCKET sd, struct sockaddr * pSaddr, sock
 	 //connect() success-1, unlikely if socket is non blocking.
 	 return 0;
      }
-
-     if (rc < 0) {
+     else {
+// https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-connect
+// Windows: If no error occurs, connect returns zero. Otherwise, it returns SOCKET_ERROR
        int io_wait = 0;
 #ifndef _WIN32
        io_wait = ((errno == EINPROGRESS) || (errno == 0)) ? 1 : 0;
@@ -15810,14 +15811,16 @@ int mg_conn_stop_ctx_init(struct mg_conn_stop_ctx *psctrl, int immediate)
       src_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
       src_addr.sin_port = htons(0);
       rc = bind(sd, (struct sockaddr *)&src_addr, sizeof(src_addr));
-      if (rc < 0) {
+      if (rc != 0) {
 	 //printf("%s(), bind failed , ERRNO = %d \n", __func__,(int)ERRNO);
 	 closesocket(sd);
 	 return -1;
       }
+      // Windows: If no error occurs, bind returns zero. Otherwise, it returns SOCKET_ERROR.
+      // Linux/POSIX: If no error occurs, bind returns zero. Otherwise, it returns -1.
 
       rc = getsockname(sd, (struct sockaddr *)&bound_addr, &len);
-      if (rc < 0) {
+      if (rc != 0) {
 	 //printf("%s(), getsockname failed , ERRNO = %d \n", __func__,(int)ERRNO);
 	 closesocket(sd);
 	 return -1;
@@ -15869,7 +15872,11 @@ int mg_signal_stop_ctx(struct mg_conn_stop_ctx *psctrl)
       to_addr.sin_port = htons(psctrl->bound_port);
       rc = sendto(psctrl->sd, (char *)&psctrl->sd, sizeof(int), 0,
               (struct sockaddr *)&to_addr, sizeof(to_addr));
+      #if defined(_WIN32) || defined(_WIN64)
+      if (rc == SOCKET_ERROR) {
+      #else 
       if (rc < 0) {
+      #endif
           //printf("%s(), sendto failed , ERRNO = %d \n", __func__,(int)ERRNO);
           return -1;
       }
