@@ -23507,7 +23507,7 @@ mg_exit_library(void)
 
 	mg_init_library_called--;
 	if (mg_init_library_called == 0) {
-#if (defined(OPENSSL_API_1_0) || defined(OPENSSL_API_1_1)) && !defined(NO_SSL)
+#if (defined(OPENSSL_API_1_0) || defined(OPENSSL_API_1_1) || defined(OPENSSL_API_3_0)) && !defined(NO_SSL)
 		if (mg_openssl_initialized) {
 			uninitialize_openssl();
 			mg_openssl_initialized = 0;
