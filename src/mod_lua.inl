@@ -1590,7 +1590,9 @@ lsp_base64_decode(lua_State *L)
 	if (num_args == 1) {
 		text = lua_tolstring(L, 1, &text_len);
 		if (text) {
-			dst = (unsigned char *)mg_malloc_ctx(text_len, ctx);
+			/* +1 means space for terminating zero */
+			dst_len = text_len * 3 / 4 + 1;
+			dst = (unsigned char *)mg_malloc_ctx(dst_len, ctx);
 			if (dst) {
 				ret = mg_base64_decode(text, (int)text_len, dst, &dst_len);
 				if (ret != -1) {
@@ -1598,7 +1600,8 @@ lsp_base64_decode(lua_State *L)
 					return luaL_error(
 					    L, "illegal character in lsp_base64_decode() call");
 				} else {
-					lua_pushlstring(L, (char *)dst, dst_len);
+					/* Remove terminating zero by subtracting 1 */
+					lua_pushlstring(L, (char *)dst, dst_len - 1);
 					mg_free(dst);
 				}
 			} else {
