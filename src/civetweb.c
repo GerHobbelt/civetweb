@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2024 the Civetweb developers
+/* Copyright (c) 2013-2025 the Civetweb developers
  * Copyright (c) 2004-2013 Sergey Lyubka
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -7415,6 +7415,7 @@ mg_url_decode(const char *src,
               int is_form_url_encoded)
 {
 	int i, j, a, b;
+
 #define HEXTOI(x) (isdigit(x) ? (x - '0') : (x - 'W'))
 
 	for (i = j = 0; (i < src_len) && (j < (dst_len - 1)); i++, j++) {
@@ -7427,10 +7428,14 @@ mg_url_decode(const char *src,
 			i += 2;
 		} else if (is_form_url_encoded && (src[i] == '+')) {
 			dst[j] = ' ';
+		} else if ((unsigned char)src[i] <= ' ') {
+			return -1; /* invalid character */
 		} else {
 			dst[j] = src[i];
 		}
 	}
+
+#undef HEXTOI
 
 	dst[j] = '\0'; /* Null-terminate the destination */
 
@@ -10918,9 +10923,13 @@ is_not_modified(const struct mg_connection *conn,
 	const char *inm = mg_get_header(conn, "If-None-Match");
 	construct_etag(etag, sizeof(etag), filestat);
 
-	return ((inm != NULL) && !mg_strcasecmp(etag, inm))
-	       || ((ims != NULL)
-	           && (filestat->last_modified <= parse_date_string(ims)));
+	if (inm) {
+		return !mg_strcasecmp(etag, inm);
+	}
+	if (ims) {
+		return (filestat->last_modified <= parse_date_string(ims));
+	}
+	return 0;
 }
 
 
